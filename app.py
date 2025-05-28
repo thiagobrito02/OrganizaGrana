@@ -247,60 +247,6 @@ def exibir_tabela_despesas(name, csv_file="despesas.csv"):
             perc = (val / total_geral) * 100
             st.write(f"{cat}: R$ {val:.2f} ({perc:.1f}%)")
 
-    # # === Gráfico por Categoria ===
-    # st.markdown("**📊 Distribuição por Categoria**")
-    # cat_totais = df_filtrado.groupby("Categoria")["Valor"].sum()
-    # if not cat_totais.empty:
-    #     fig1, ax1 = plt.subplots()
-    #     ax1.pie(cat_totais, labels=cat_totais.index, autopct="%1.1f%%", startangle=90)
-    #     ax1.axis("equal")
-    #     st.pyplot(fig1)
-    # else:
-    #     st.info("Sem dados suficientes para gráfico de categoria.")
-
-    # # === Gráfico por Pessoa ===
-    # st.markdown("**👥 Gastos por Pessoa**")
-    # user_totais = df_filtrado.groupby("Usuario")["Valor"].sum()
-    # if not user_totais.empty:
-    #     fig2, ax2 = plt.subplots()
-    #     user_totais.plot(kind="bar", ax=ax2, color="#66b3ff")
-    #     ax2.set_ylabel("Valor (R$)")
-    #     ax2.set_xlabel("Usuário")
-    #     ax2.set_title("Gasto por Pessoa")
-    #     st.pyplot(fig2)
-    # else:
-    #     st.info("Sem dados para gráfico de pessoa.")
-
-    # # === Top categorias por valor acumulado ===
-    # st.markdown("**🏆 Top Categorias por Valor Acumulado**")
-    # top_categorias = df_filtrado.groupby("Categoria")["Valor"].sum().sort_values(ascending=False).head(5)
-    # if not top_categorias.empty:
-    #     fig3, ax3 = plt.subplots()
-    #     bars = ax3.barh(top_categorias.index, top_categorias.values, color="#ffcc99")
-    #     ax3.set_xlabel("Valor Total (R$)")
-    #     ax3.set_title("Top Categorias de Despesa")
-    #     ax3.invert_yaxis()
-
-    #     for bar in bars:
-    #         width = bar.get_width()
-    #         ax3.text(width + 1, bar.get_y() + bar.get_height()/2, f"R$ {width:,.2f}", va='center')
-
-    #     st.pyplot(fig3)
-    # else:
-    #     st.info("Sem categorias suficientes para o ranking.")
-
-    # # === Comparativo mês a mês ===
-    # st.markdown("**📆 Comparativo Mês a Mês**")
-    # df_filtrado["AnoMes"] = df_filtrado["Data"].dt.to_period("M").astype(str)
-    # gastos_mensais = df_filtrado.groupby("AnoMes")["Valor"].sum()
-    # if not gastos_mensais.empty:
-    #     fig4, ax4 = plt.subplots()
-    #     gastos_mensais.plot(kind="bar", ax=ax4, color="#90ee90")
-    #     ax4.set_ylabel("Valor (R$)")
-    #     ax4.set_title("Evolução dos Gastos por Mês")
-    #     st.pyplot(fig4)
-    # else:
-    #     st.info("Sem dados para comparativo mensal.")
 
     # === Gráfico por Categoria ===
     st.markdown("**📊 Distribuição por Categoria**")
