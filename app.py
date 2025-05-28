@@ -2,7 +2,6 @@ import streamlit as st
 import yaml
 from yaml import SafeLoader
 import pandas as pd
-#import matplotlib.pyplot as plt
 import plotly.express as px
 
 
