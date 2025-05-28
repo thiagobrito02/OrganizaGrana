@@ -4,3 +4,4 @@ bcrypt
 PyYAML
 pandas
 plotly
+matplotlib
