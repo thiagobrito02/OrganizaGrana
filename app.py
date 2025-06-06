@@ -344,71 +344,83 @@ def render_expense_table(df_para_exibir):
         st.info("Nenhuma despesa para exibir com os filtros atuais.")
         return
     
+    # 1. VALUE GETTER: Prepara o valor para a CÉLULA DE EDIÇÃO.
+    # Pega o número (ex: 200.5) e formata como texto com vírgula (ex: "200,50").
+    js_value_getter = JsCode("""
+        function(params) {
+            if (params.data && typeof params.data.Valor === 'number') {
+                return params.data.Valor.toFixed(2).replace('.', ',');
+            }
+            return params.data.Valor;
+        }
+    """)
+
+    # 2. VALUE FORMATTER: Formata o valor para a CÉLULA DE VISUALIZAÇÃO.
+    # Adiciona o "R$" para quando a célula não está sendo editada.
+    js_value_formatter = JsCode("""
+        function(params) {
+            if (typeof params.value === 'number') {
+                return 'R$ ' + params.value.toFixed(2).replace('.', ',');
+            }
+            return params.value;
+        }
+    """)
+
+    # 3. VALUE PARSER: "Entende" o que o usuário digita na edição.
+    # Pega o texto (ex: "200,50") e converte de volta para um número (ex: 200.5).
+    js_value_parser = JsCode("""
+        function(params) {
+            let value = params.newValue;
+            if (value === null || value === undefined || value === '') { return 0; }
+            let clean_string = String(value).replace(/\./g, '').replace(',', '.');
+            let number = parseFloat(clean_string);
+            return isNaN(number) ? params.oldValue : number;
+        }
+    """)
+    
+    # 2. Definição Manual das Colunas (columnDefs)
+    # Esta é a parte principal da mudança.
+    column_defs = [
+        # Coluna especial para os Checkboxes
+        {
+            "headerName": "", # Sem texto no cabeçalho
+            "checkboxSelection": True,
+            "headerCheckboxSelection": True,
+            "width": 50,
+            "lockPosition": True
+        },
+        # Definição de cada uma das suas colunas de dados
+        {"field": "Data", "headerName": "Data", "editable": True, "type": ["dateColumnFilter", "customDateTimeFormat"], "custom_format_string": "dd/MM/yyyy"},
+        {"field": "Categoria", "headerName": "Categoria", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': CATEGORIAS_PREDEFINIDAS}},
+        {"field": "Valor", "headerName": "Valor", "editable": True, "valueGetter": js_value_getter, "valueParser": js_value_parser, "valueFormatter": js_value_formatter},
+        {"field": "Descricao", "headerName": "Descrição", "editable": True},
+        {"field": "Pagamento", "headerName": "Pagamento", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': PAGAMENTO_PREDEFINIDO}},
+        {"field": "Usuario", "headerName": "Usuário", "editable": False},
+        # A coluna id_original não precisa ser definida aqui se não quisermos exibi-la
+    ]
+
+    # 3. Definição das Opções Gerais do Grid
+    grid_options = {
+        "columnDefs": column_defs,
+        "rowSelection": 'multiple',
+        "suppressRowClickSelection": True, # Evita que a linha seja selecionada com um clique normal
+        "defaultColDef": { # Definições padrão para todas as colunas
+            "sortable": True,
+            "filter": True,
+            "resizable": True,
+        },
+    }
+    # --- FIM DA CONSTRUÇÃO MANUAL ---
+
+    
     # --- Formulário Único para Edição, Salvamento e Exclusão ---
     with st.form("main_form"):
         st.subheader("Tabela de Despesas")
         st.caption("Você pode editar as células diretamente. Ao final, clique em Salvar ou Excluir.")
 
-        gb = GridOptionsBuilder.from_dataframe(df_para_exibir)
-        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-
-        # 1. VALUE GETTER: Prepara o valor para a CÉLULA DE EDIÇÃO.
-        # Pega o número (ex: 200.5) e formata como texto com vírgula (ex: "200,50").
-        js_value_getter = JsCode("""
-            function(params) {
-                if (params.data && typeof params.data.Valor === 'number') {
-                    return params.data.Valor.toFixed(2).replace('.', ',');
-                }
-                return params.data.Valor;
-            }
-        """)
-
-        # 2. VALUE FORMATTER: Formata o valor para a CÉLULA DE VISUALIZAÇÃO.
-        # Adiciona o "R$" para quando a célula não está sendo editada.
-        js_value_formatter = JsCode("""
-            function(params) {
-                if (typeof params.value === 'number') {
-                    return 'R$ ' + params.value.toFixed(2).replace('.', ',');
-                }
-                return params.value;
-            }
-        """)
-
-        # 3. VALUE PARSER: "Entende" o que o usuário digita na edição.
-        # Pega o texto (ex: "200,50") e converte de volta para um número (ex: 200.5).
-        js_value_parser = JsCode("""
-            function(params) {
-                let value = params.newValue;
-                if (value === null || value === undefined || value === '') { return 0; }
-                let clean_string = String(value).replace(/\./g, '').replace(',', '.');
-                let number = parseFloat(clean_string);
-                return isNaN(number) ? params.oldValue : number;
-            }
-        """)
-
-        gb.configure_column("Valor", 
-            type=["numericColumn", 
-                    "numberColumnFilter", 
-                    "customNumericFormat"], 
-            precision=2, 
-            editable=True, 
-            valueGetter=js_value_getter,      
-            valueParser=js_value_parser,
-            valueFormatter=js_value_formatter
-        )
-        
-        gb.configure_column("Data", type=["dateColumnFilter", "customDateTimeFormat"], custom_format_string='dd/MM/yyyy', editable=True)
-        gb.configure_column("Categoria", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': CATEGORIAS_PREDEFINIDAS})
-        gb.configure_column("Pagamento", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': PAGAMENTO_PREDEFINIDO})
-        gb.configure_column("Descricao", editable=True)
-        gb.configure_column("Usuario", editable=False)
-        gb.configure_column("id_original", hide=True)
-        
-        grid_options = gb.build()
 
         grid_return = AgGrid(
             df_para_exibir,
-            theme='alpine',
             gridOptions=grid_options,
             key='stable_expense_grid',
             update_mode=GridUpdateMode.MODEL_CHANGED,
@@ -416,7 +428,7 @@ def render_expense_table(df_para_exibir):
             allow_unsafe_jscode=True,
             enable_enterprise_modules=False,
             height=400,
-            reload_data=True  # <--- ADICIONE ESTA LINHA
+            reload_data=True
         )
 
         # Botões de ação dentro do mesmo formulário
