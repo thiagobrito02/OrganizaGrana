@@ -1,0 +1,26 @@
+# Framework principal para a criação do aplicativo web
+streamlit==1.35.0
+
+# Para manipulação e análise de dados (DataFrames)
+pandas==2.2.2
+
+# Para ler e interpretar o arquivo de configuração YAML
+PyYAML==6.0.1
+
+# Para interagir com as Planilhas Google (Google Sheets)
+gspread==5.12.4
+
+# Para autenticação com a API do Google (dependência do gspread)
+oauth2client==4.1.3
+
+# Componente para criar tabelas interativas e editáveis
+streamlit-aggrid==0.3.4.post3
+
+# Biblioteca fundamental para computação numérica (dependência do pandas)
+numpy==1.26.4
+
+# Para a criação de gráficos interativos e dashboards
+plotly==5.22.0
+
+# Para manipulação avançada de datas (cálculo de despesas recorrentes)
+python-dateutil==2.9.0.post0
