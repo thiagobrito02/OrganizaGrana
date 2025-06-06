@@ -52,17 +52,22 @@ WORKSHEET_NAME = "Despesas"
 
 # ======================== GOOGLE SHEETS ========================
 @st.cache_resource
-@st.cache_resource
 def get_sheets_client():
     try:
         # Pega as credenciais diretamente do st.secrets
         creds_dict = st.secrets["google_credentials"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
-        return gspread.authorize(creds)
+        client = gspread.authorize(creds)
+        
+        # Testa a conexão para garantir que as permissões estão corretas
+        client.open(SHEET_NAME)
+        
+        return client
     except Exception as e:
-        st.error(f"Erro ao conectar com Google Sheets: {e}")
-        st.error("Verifique se as credenciais 'google_credentials' estão configuradas corretamente nos Segredos do Streamlit Cloud.")
-        return None
+        # Se qualquer passo acima falhar, mostra um erro claro em vez de entrar em loop
+        st.error(f"Falha ao conectar com o Google Sheets: {e}")
+        st.warning("Verifique se as credenciais 'google_credentials' nos Segredos estão corretas e se a conta de serviço tem permissão para acessar a planilha.")
+        return None # Retorna None para indicar a falha na conexão
 
 @st.cache_data(ttl=300, show_spinner=False)
 def read_sheet_data(_client, sheet_name, worksheet_name):
@@ -217,6 +222,13 @@ def authenticate_user():
 # ======================== FUNÇÕES PRINCIPAIS ========================
 def load_expenses():
     client = get_sheets_client()
+    
+    # Se a conexão falhou, o client será None.
+    if client is None:
+        # Para o app não quebrar, criamos um DataFrame vazio e paramos a execução aqui.
+        st.session_state["expenses_df"] = pd.DataFrame(columns=["Data", "Categoria", "Valor", "Descricao", "Pagamento", "Usuario", "id_original"])
+        return
+
     df = read_sheet_data(client, SHEET_NAME, WORKSHEET_NAME)
     if df.empty:
         df = pd.DataFrame(columns=["Data", "Categoria", "Valor", "Descricao", "Pagamento", "Usuario", "id_original"])
