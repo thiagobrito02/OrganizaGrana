@@ -1,3 +1,4 @@
+# ======================== IMPORTS ========================
 import streamlit as st
 import pandas as pd
 import yaml
@@ -6,697 +7,798 @@ from datetime import datetime, date
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
-import time # Para pequenos delays de teste
+from st_aggrid.shared import JsCode
+import time
+import locale
+from pandas.api.types import is_numeric_dtype
+import numpy as np # Importe a biblioteca numpy
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime
+from dateutil.relativedelta import relativedelta # Importe no início do seu arquivo
 
-# 1. st.set_page_config() DEVE SER O PRIMEIRO COMANDO STREAMLIT
-st.set_page_config(layout="wide", page_title="💸 Controle de Despesas")
+# ======================== CONFIGURAÇÕES GERAIS ========================
+st.set_page_config(
+    layout="wide",
+    page_title="💸 FinApp - Controle de Despesas",
+    initial_sidebar_state="collapsed",
+)
 
-# 2. Constantes Globais (se houver, como CATEGORIAS_PREDEFINIDAS)
+# A configuração de locale continua importante
+try:
+    # Tenta configurar para o padrão Linux/macOS, abrangendo todas as categorias (moeda, números, etc.)
+    locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
+except locale.Error:
+    # Se falhar, tenta configurar para o padrão Windows
+    locale.setlocale(locale.LC_ALL, 'Portuguese_Brazil.1252')
+# --------
+
+# ======================== CSS ========================
+CUSTOM_CSS = """
+<style>
+.css-1v0mbdj.e115fcil1 { max-width: 400px; margin: auto; }
+section[data-testid="stTextInput"] > div,
+section[data-testid="stPassword"] > div {
+    max-width: 300px;
+    margin: auto;
+}
+.stButton > button {
+    display: block;
+    margin: 1rem auto;
+}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+# ======================== CONSTANTES ========================
 CATEGORIAS_PREDEFINIDAS = ["Alimentação", "Mercado", "Transporte", "Lazer", "Casa", "Saúde", "Pessoal", "Zara", "Outros"]
 PAGAMENTO_PREDEFINIDO = ["Cartão", "Pix", "Dinheiro"]
-
-# 3. Configurações (como Google Sheets, se não dependerem de st.secrets ainda)
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-CREDENTIALS_FILE = "organiza-grana-290b193581de.json" # Certifique-se que o caminho está correto
+CREDENTIALS_FILE = "organiza-grana-290b193581de.json"
 SHEET_NAME = "controle_despesa"
+WORKSHEET_NAME = "Despesas"
 
-# 4. Definições de Funções (incluindo aquelas com decoradores @st.cache_resource/@st.cache_data)
+# ======================== GOOGLE SHEETS ========================
 @st.cache_resource
-def get_google_sheets_client():
+@st.cache_resource
+def get_sheets_client():
     try:
-        credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
-        client = gspread.authorize(credentials)
-        return client
+        # Pega as credenciais diretamente do st.secrets
+        creds_dict = st.secrets["google_credentials"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+        return gspread.authorize(creds)
     except Exception as e:
         st.error(f"Erro ao conectar com Google Sheets: {e}")
-        st.error("Verifique se o arquivo de credenciais JSON está correto e acessível, e se as APIs necessárias estão ativadas no Google Cloud.")
-        return None # Retorna None para que o app possa lidar com a falha
+        st.error("Verifique se as credenciais 'google_credentials' estão configuradas corretamente nos Segredos do Streamlit Cloud.")
+        return None
 
-# @st.cache_data(ttl=600) # Cache por 10 minutos
-def get_sheet_data(_client, sheet_name_param, worksheet_name):
-    if _client is None: # Se o cliente não pôde ser obtido
-        return [] # Retorna uma lista vazia para evitar mais erros
-    try:
-        sheet = _client.open(sheet_name_param)
-        worksheet = sheet.worksheet(worksheet_name)
-        
-        # Pega todos os valores como strings formatadas (como aparecem na planilha)
-        list_of_lists = worksheet.get_values(value_render_option='FORMATTED_VALUE')
-        
-        if not list_of_lists or len(list_of_lists) < 1: # Verifica se a planilha não está vazia (pelo menos cabeçalho)
-            st.info(f"A aba '{worksheet_name}' parece estar vazia ou sem cabeçalho.")
-            return [] 
-            
-        headers = list_of_lists[0]
-        if not headers: # Verifica se o cabeçalho não está vazio
-            st.warning(f"Cabeçalho não encontrado na aba '{worksheet_name}'.")
-            return []
+@st.cache_data(ttl=300, show_spinner=False)
+def read_sheet_data(_client, sheet_name, worksheet_name):
+    worksheet = _client.open(sheet_name).worksheet(worksheet_name)
+    values = worksheet.get_values(value_render_option="FORMATTED_VALUE")
+    if len(values) < 2:
+        return pd.DataFrame()
+    df = pd.DataFrame(values[1:], columns=values[0])
+    if "id_original" not in df.columns:
+        df["id_original"] = list(range(len(df)))
+    df["id_original"] = pd.to_numeric(df["id_original"], errors="coerce").fillna(-1).astype(int)
+    return df
 
-        data_rows = list_of_lists[1:]
-        
-        # Converte para lista de dicionários, para manter compatibilidade com o que pd.DataFrame espera
-        # e para facilitar o acesso por nome de coluna no DataFrame
-        data_as_dicts = [dict(zip(headers, row)) for row in data_rows]
-            
-        return data_as_dicts
-        
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Planilha '{sheet_name_param}' não encontrada. Verifique o nome e as permissões.")
-        return []
-    except gspread.exceptions.WorksheetNotFound:
-        st.error(f"Aba '{worksheet_name}' não encontrada na planilha '{sheet_name_param}'.")
-        return []
-    except Exception as e:
-        st.error(f"Erro ao buscar dados da aba '{worksheet_name}' usando get_values: {e}")
-        return []
-def update_worksheet_focada(_client, sheet_name_param, worksheet_name, df_to_update):
-    if _client is None:
-        st.error("UPDATE_WORKSHEET: Cliente Google Sheets não disponível.")
-        return False # Indica falha
-    try:
-        st.info(f"UPDATE_WORKSHEET: Tentando ABRIR planilha '{sheet_name_param}', aba '{worksheet_name}'.")
-        sheet = _client.open(sheet_name_param)
-        worksheet = sheet.worksheet(worksheet_name)
-        st.info(f"UPDATE_WORKSHEET: Aba '{worksheet_name}' aberta. {len(df_to_update)} linhas de dados para ATUALIZAR.")
-
-        # Log da contagem de linhas original para contexto
+def write_sheet_data(client, sheet_name, worksheet_name, df):
+    if df.empty:
+        # Se o dataframe estiver vazio após a exclusão, limpamos a planilha e deixamos só o cabeçalho.
+        # Isso pode ser ajustado se o comportamento desejado for outro.
         try:
-            # Adiciona um pequeno delay antes de contar, para tentar pegar um estado mais estável
-            time.sleep(1) 
-            original_values = worksheet.get_all_values()
-            original_row_count = len(original_values) if original_values else 0
-            st.info(f"UPDATE_WORKSHEET: Contagem de linhas ANTES da operação: {original_row_count}")
-            # if original_row_count > 0 and original_row_count <=5: # Log pequeno para ver o que estava lá
-            #     st.text("Dados originais (amostra):")
-            #     for r_idx, r_val in enumerate(original_values[:5]):
-            #         st.text(f"  Linha GS {r_idx+1}: {r_val}")
-        except Exception as e_count:
-            st.warning(f"UPDATE_WORKSHEET: Não foi possível contar linhas antes: {e_count}")
-
-        st.info(f"UPDATE_WORKSHEET: Tentando LIMPAR (worksheet.clear()) a aba '{worksheet_name}'...")
-        worksheet.clear()
-        st.info("UPDATE_WORKSHEET: Chamada worksheet.clear() CONCLUÍDA (sem exceção Python).")
-        
-        # Delay e verificação após clear
-        time.sleep(2) # Delay um pouco maior
-        values_after_clear = worksheet.get_all_values()
-        if not values_after_clear or (len(values_after_clear) == 1 and not any(values_after_clear[0])) or len(values_after_clear) == 0 :
-            st.info("DEBUG UPDATE_WORKSHEET: Aba VERIFICADA como VAZIA após clear().")
-        else:
-            st.warning(f"DEBUG UPDATE_WORKSHEET: Aba NÃO parece vazia após clear()! Linhas: {len(values_after_clear)}. Amostra: {values_after_clear[:2]}")
-
-
-        api_response_update = None
-        if not df_to_update.empty:
-            st.info(f"UPDATE_WORKSHEET: Tentando ESCREVER {len(df_to_update)} linhas de dados (mais cabeçalho)...")
-            data_to_write = [df_to_update.columns.values.tolist()] + df_to_update.values.tolist()
-            api_response_update = worksheet.update(data_to_write, value_input_option='USER_ENTERED')
-            st.info(f"UPDATE_WORKSHEET: Chamada worksheet.update() CONCLUÍDA. Resposta da API: {api_response_update}")
-
-            if isinstance(api_response_update, dict) and api_response_update.get('updatedCells', 0) > 0:
-                num_data_rows_written_api = api_response_update.get('updatedRows', 0) - 1 # -1 para cabeçalho
-                if num_data_rows_written_api == len(df_to_update):
-                    st.success(f"SUCESSO API: Google Sheets reportou {api_response_update.get('updatedCells')} células atualizadas em '{worksheet_name}'. {num_data_rows_written_api} linhas de dados escritas.")
-                    # Verificação final adicional
-                    time.sleep(2)
-                    final_rows_check = worksheet.get_all_values()
-                    if len(final_rows_check) == (len(df_to_update) + 1):
-                        st.info("VERIFICAÇÃO FINAL: Contagem de linhas no GS corresponde ao esperado.")
-                        return True
-                    else:
-                        st.error(f"VERIFICAÇÃO FINAL FALHOU: GS tem {len(final_rows_check)} linhas, esperado {len(df_to_update) + 1}.")
-                        return False
-                else:
-                    st.error(f"ERRO DE ESCRITA PARCIAL API: Esperava escrever {len(df_to_update)} linhas de dados, mas API reportou {num_data_rows_written_api} (updatedRows: {api_response_update.get('updatedRows')}). Resposta: {api_response_update}")
-                    return False
-            else:
-                st.error(f"ERRO DE ESCRITA API: Google Sheets API não confirmou células atualizadas. Resposta: {api_response_update}")
-                return False
-        else: # df_to_update está vazio
-            # Verifica se a planilha está realmente vazia após o clear
-            time.sleep(2)
-            final_rows_check_empty = worksheet.get_all_values()
-            if not final_rows_check_empty or (len(final_rows_check_empty) == 1 and not any(final_rows_check_empty[0])):
-                st.success(f"SUCESSO: Planilha '{worksheet_name}' foi limpa (nenhum dado para escrever).")
-                return True
-            else:
-                st.error(f"ERRO AO LIMPAR: Planilha deveria estar vazia, mas contém {len(final_rows_check_empty)} linhas.")
-                return False
-
-    except gspread.exceptions.APIError as e_api:
-        st.error(f"UPDATE_WORKSHEET: ERRO DE API DO GOOGLE ao atualizar '{worksheet_name}'.")
-        try:
-            error_content = e_api.response.json()
-            st.error("Detalhes do erro da API:")
-            st.json(error_content)
-        except Exception: # Fallback se .json() não funcionar ou e_api.response não existir
-            st.error(f"Detalhes brutos do APIError: {e_api}")
-        return False
-    except Exception as e_general:
-        st.error(f"UPDATE_WORKSHEET: ERRO GERAL ao atualizar '{worksheet_name}': {type(e_general).__name__} - {e_general}")
-        # st.exception(e_general) # Para traceback completo se necessário
-        return False
-
-def update_worksheet(_client, sheet_name_param, worksheet_name, df_to_update):
-    if _client is None:
-        st.error("UPDATE_WORKSHEET: Cliente Google Sheets não disponível.")
-        return False
-    try:
-        st.info(f"UPDATE_WORKSHEET: Abrindo planilha '{sheet_name_param}', aba '{worksheet_name}'.")
-        sheet = _client.open(sheet_name_param)
-        worksheet = sheet.worksheet(worksheet_name)
-        
-        st.info(f"UPDATE_WORKSHEET: Limpando aba '{worksheet_name}'...")
-        worksheet.clear() 
-        st.info("UPDATE_WORKSHEET: Chamada worksheet.clear() concluída.")
-
-        # Pequena pausa para garantir que a limpeza seja processada pelo Google
-        time.sleep(1) 
-
-        update_result = None
-        expected_rows_after_update = 0 # Se df_to_update estiver vazio (excluindo todas as despesas)
-        
-        if not df_to_update.empty:
-            st.info(f"UPDATE_WORKSHEET: Escrevendo {len(df_to_update)} linhas de dados (mais cabeçalho)...")
-            data_to_write = [df_to_update.columns.values.tolist()] + df_to_update.values.tolist()
-            expected_rows_after_update = len(data_to_write) # Cabeçalho + linhas de dados
-            update_result = worksheet.update(data_to_write, value_input_option='USER_ENTERED')
-            st.info(f"UPDATE_WORKSHEET: Chamada worksheet.update() concluída. Resultado da API: {update_result}")
-        else:
-            st.info("UPDATE_WORKSHEET: df_to_update está vazio, planilha deve permanecer limpa.")
-        
-        # Pequena pausa e releitura para verificação final
-        time.sleep(2) # Aumentar um pouco o delay antes da verificação final
-        final_values_in_sheet = worksheet.get_all_values()
-        num_final_rows_in_sheet = len(final_values_in_sheet) if final_values_in_sheet else 0
-        # Se final_values_in_sheet for [[], [], []] (linhas vazias), len ainda será 3, mas são vazias.
-        # Uma verificação mais robusta seria contar linhas com dados.
-        # Para simplificar, vamos usar len por agora.
-        
-        # Avalia o sucesso
-        if df_to_update.empty and num_final_rows_in_sheet == 0: # Se o objetivo era limpar e ficou limpa
-            st.success(f"Aba '{worksheet_name}' limpa com sucesso no Google Sheets.")
+            worksheet = client.open(sheet_name).worksheet(worksheet_name)
+            worksheet.clear()
+            # Se quiser manter o cabeçalho mesmo com a planilha vazia:
+            # worksheet.update([df.columns.tolist()], value_input_option="USER_ENTERED")
             return True
-        elif not df_to_update.empty and update_result and update_result.get('updatedCells', 0) > 0:
-            if num_final_rows_in_sheet == expected_rows_after_update:
-                st.success(f"Aba '{worksheet_name}' atualizada com sucesso no Google Sheets ({len(df_to_update)} linhas de dados).")
-                return True
-            else:
-                st.error(f"DISCREPÂNCIA APÓS UPDATE! Esperava {expected_rows_after_update} linhas no GS, mas encontrou {num_final_rows_in_sheet}. Update result: {update_result}")
-                # st.write("Dados que tentaram ser escritos:", data_to_write if not df_to_update.empty else "Nenhum (planilha deveria estar limpa)")
-                # st.write("Dados finais lidos do GS:", final_values_in_sheet)
-                return False
-        elif df_to_update.empty and num_final_rows_in_sheet != 0: # Objetivo era limpar, mas não ficou limpa
-            st.error(f"Falha ao limpar a aba '{worksheet_name}'. Encontradas {num_final_rows_in_sheet} linhas.")
-            return False
-        else: # update_result não indicou sucesso ou algo mais falhou
-            st.error(f"Falha na operação de update da aba '{worksheet_name}'. Resultado da API (se houver): {update_result}")
-            return False
-
-    except gspread.exceptions.APIError as e_api:
-        # Tenta extrair a mensagem de erro da resposta JSON da API
-        error_details = e_api.args[0] if e_api.args else {}
-        if isinstance(error_details, dict) and 'error' in error_details:
-            error_message = error_details['error'].get('message', str(e_api))
-        else:
-            error_message = str(e_api)
-        st.error(f"UPDATE_WORKSHEET: Erro de API do Google ao atualizar '{worksheet_name}': {error_message}")
-        # st.json(error_details) # Para ver a estrutura completa do erro da API
-        return False
-    except Exception as e:
-        st.error(f"UPDATE_WORKSHEET: Erro geral ao atualizar '{worksheet_name}': {type(e).__name__} - {e}")
-        return False
-
-
-# Coloque aqui suas outras definições de função:
-# autenticar_usuario(), carregar_despesas(), salvar_despesas_gs(), 
-# exibir_formulario_despesa(), e a exibir_tabela_despesas() que estávamos trabalhando.
-# Exemplo:
-# def autenticar_usuario(): ...
-# def carregar_despesas(client): ... (agora recebe client)
-# def salvar_despesas_gs(client, df_despesas): ... (agora recebe client e o df a salvar)
-# def exibir_formulario_despesa(name): ...
-# def exibir_tabela_despesas(name, client): ... (agora recebe client)
-
-
-# ======================== Autenticação (exemplo, adapte) ========================
-def autenticar_usuario():
-    try:
-        with open("config.yaml", "r", encoding="utf-8") as file: # Especificar encoding é uma boa prática
-            config = yaml.load(file, Loader=SafeLoader)
-    except FileNotFoundError:
-        st.error("Erro Crítico: Arquivo de configuração `config.yaml` não encontrado!")
-        st.info("""
-            Por favor, crie o arquivo `config.yaml` no mesmo diretório do seu script `app.py` com o seguinte formato:
-            
-            ```yaml
-            usuarios:
-              seu_nome_de_usuario:
-                nome: "Seu Nome de Exibição"
-                senha: "sua_senha_aqui"
-              outro_usuario:
-                nome: "Nome do Outro Usuário"
-                senha: "senha_dele"
-            ```
-            Substitua pelos seus dados reais.
-        """)
-        return None, False # Impede o resto do app de tentar rodar sem config
-    except yaml.YAMLError as e:
-        st.error(f"Erro Crítico: Erro ao ler o formato do arquivo `config.yaml`: {e}")
-        st.info("Verifique a sintaxe YAML do seu arquivo, especialmente a indentação.")
-        return None, False
-    except Exception as e:
-        st.error(f"Erro Crítico: Ocorreu um erro inesperado ao carregar `config.yaml`: {e}")
-        return None, False
-
-    if "usuario_autenticado" not in st.session_state:
-        st.session_state.usuario_autenticado = False
-        st.session_state.nome_usuario = ""
-
-    if not st.session_state.usuario_autenticado:
-        st.title("🔐 Login")
-
-        if not config or "usuarios" not in config or not isinstance(config["usuarios"], dict):
-            st.error("Erro na Configuração: A chave 'usuarios' não foi encontrada ou não está formatada corretamente em `config.yaml`.")
-            st.info("Certifique-se de que `config.yaml` começa com `usuarios:` e contém os dados dos usuários indentados corretamente abaixo.")
-            return None, False
-
-        usuario_input = st.text_input("Usuário", key="login_usuario_input")
-        senha_input = st.text_input("Senha", type="password", key="login_senha_input")
-
-        if st.button("Entrar", key="login_entrar_btn"):
-            user_credentials_map = config.get("usuarios", {}) # Pega o dicionário de usuários
-            
-            if usuario_input in user_credentials_map:
-                user_config_data = user_credentials_map[usuario_input]
-                
-                # Verifica se user_config_data é um dicionário e contém 'senha'
-                if isinstance(user_config_data, dict) and "senha" in user_config_data:
-                    stored_password = user_config_data["senha"]
-                    if stored_password == senha_input:
-                        st.session_state.usuario_autenticado = True
-                        # Usa 'nome' para exibição, ou o próprio 'usuario_input' se 'nome' não estiver definido
-                        st.session_state.nome_usuario = user_config_data.get("nome", usuario_input) 
-                        st.rerun()
-                    else:
-                        st.error("Senha incorreta.")
-                else:
-                    st.error(f"Configuração interna para o usuário '{usuario_input}' está malformada (falta 'senha' ou não é um dicionário). Verifique o `config.yaml`.")
-            else:
-                st.error(f"Usuário '{usuario_input}' não encontrado.")
-        
-        return None, False # Retorna se o botão não foi clicado ou se o login falhou
-    else:
-        # Usuário já está autenticado
-        return st.session_state.nome_usuario, True
-
-# ======================== Dados (Google Sheets) ========================
-# Modifique carregar_despesas e salvar_despesas_gs para aceitar 'g_client'
-g_sheets_client_global = get_google_sheets_client() # Obtém o cliente uma vez
-
-def carregar_despesas():
-    if g_sheets_client_global is None:
-        st.session_state["despesas"] = []
-        return
-
-    try:
-        data = get_sheet_data(g_sheets_client_global, SHEET_NAME, "Despesas")
-        df = pd.DataFrame(data)
-
-        if df.empty:
-            st.session_state["despesas"] = [] # Mantém como lista vazia se não há dados
-        else:
-            if "Data" in df.columns:
-                df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
-            else:
-                df["Data"] = pd.NaT 
-            
-            # --- LÓGICA DE PARSING CORRIGIDA PARA A COLUNA "VALOR" ---
-            if "Valor" in df.columns:
-                valor_como_string = df["Valor"].astype(str)
-            
-                valor_sem_milhar = valor_como_string.str.replace(r'\.', '', regex=True)
-            
-                valor_com_ponto_decimal = valor_sem_milhar.str.replace(',', '.', regex=False)
-                
-                df["Valor"] = pd.to_numeric(valor_com_ponto_decimal, errors='coerce').fillna(0.0)
-            else:
-                df["Valor"] = 0.0
-             
-            df["Valor"] = df["Valor"].astype(float)
-            
-            expected_cols = ["Categoria", "Descricao", "Pagamento", "Usuario"]
-            for col in expected_cols:
-                if col not in df.columns:
-                    df[col] = "" if col != "Usuario" else None 
-
-            st.session_state["despesas"] = df.to_dict(orient="records")
-
-    except Exception as e:
-        st.error(f"Erro geral ao carregar e processar despesas: {e}")
-        # st.exception(e) # Descomente para ver o traceback completo no Streamlit se necessário
-        st.session_state["despesas"] = [] # Garante que 'despesas' seja uma lista em caso de erro
-
-# Certifique-se que salvar_despesas_gs_atualizado() chama esta nova função:
-def salvar_despesas_gs_atualizado():
-    if g_sheets_client_global is None:
-        st.error("SALVAR_GS: Cliente Google Sheets não inicializado.")
-        return False
-    if "despesas" in st.session_state:
-        df_to_save = pd.DataFrame(st.session_state["despesas"])
-        # ... (sua lógica para preparar df_to_save, cols_obrigatorias, conversão de data) ...
-        # Exemplo da conversão de data que deve estar aqui:
-        cols_obrigatorias = ["Data", "Categoria", "Valor", "Descricao", "Pagamento", "Usuario"]
-        for col in cols_obrigatorias:
-            if col not in df_to_save.columns:
-                if col == "Data": df_to_save[col] = pd.NaT
-                elif col == "Valor": df_to_save[col] = 0.0
-                else: df_to_save[col] = ""
-        
-        if not df_to_save.empty: # Só seleciona colunas se não estiver vazio
-             df_to_save = df_to_save[cols_obrigatorias]
-
-        if "Data" in df_to_save.columns and not df_to_save.empty:
-            df_to_save["Data"] = pd.to_datetime(df_to_save["Data"], errors='coerce')
-            df_to_save["Data"] = df_to_save["Data"].apply(lambda x: x.strftime("%Y-%m-%d") if pd.notnull(x) else None)
-        if "Valor" in df_to_save.columns and not df_to_save.empty: # Garante que valor seja numérico
-            df_to_save["Valor"] = pd.to_numeric(df_to_save["Valor"], errors='coerce').fillna(0.0)
-
-
-        st.info(f"SALVAR_GS: Preparando para atualizar GS. df_to_save tem {len(df_to_save)} linhas.")
-        success_gs = update_worksheet_focada(g_sheets_client_global, SHEET_NAME, "Despesas", df_to_save) # Chama a nova função
-        
-        if success_gs:
-            st.info("SALVAR_GS: update_worksheet_focada reportou SUCESSO.")
-            # Se você reabilitar o cache em get_sheet_data, limpe-o aqui
-            # st.cache_data.clear()
-            return True
-        else:
-            st.warning("SALVAR_GS: update_worksheet_focada reportou FALHA.")
-            return False
-    st.warning("SALVAR_GS: 'despesas' não encontrado no st.session_state.")
-    return False
-
-# ======================== Funções de Interface (exibir_formulario_despesa, exibir_tabela_despesas) ========================
-# Cole aqui as versões mais recentes dessas funções que estávamos depurando.
-# Lembre-se de chamar salvar_despesas_gs_atualizado() onde for necessário.
-# Exemplo (coloque a sua função exibir_tabela_despesas completa aqui):
-def exibir_formulario_despesa(name):
-    st.subheader("📝 Nova Despesa")
-    with st.form("form_despesa", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            data_input = st.date_input("📅 Data", value=date.today(), format="DD/MM/YYYY", key="form_data")
-        with col2:
-            valor_input = st.number_input("💵 Valor (R$)", min_value=0.01, step=0.01, format="%.2f", key="form_valor")
-        with col3:
-            categoria_input = st.selectbox(
-                "📂 Categoria", CATEGORIAS_PREDEFINIDAS, index=None,
-                placeholder="Selecione uma categoria...", key="form_categoria"
-            )
-        descricao_input = st.text_input("📝 Descrição", key="form_descricao")
-        pagamento_input = st.radio("💳 Forma de Pagamento", ["Cartão", "Pix", "Dinheiro"], horizontal=True, index=None, key="form_pagamento")
-        submit_button = st.form_submit_button("➕ Adicionar")
-
-    if submit_button:
-        # Validações
-        if not all([data_input, valor_input > 0, categoria_input, pagamento_input]):
-            st.warning("Por favor, preencha todos os campos obrigatórios.")
-            return False
-        
-        nova_despesa = {
-            "Data": pd.to_datetime(data_input),
-            "Categoria": categoria_input, "Valor": valor_input,
-            "Descricao": descricao_input if descricao_input else "",
-            "Pagamento": pagamento_input, "Usuario": name
-        }
-        # Garante que 'despesas' exista e seja uma lista
-        if "despesas" not in st.session_state or not isinstance(st.session_state["despesas"], list):
-            st.session_state["despesas"] = []
-            
-        st.session_state["despesas"].append(nova_despesa)
-        salvar_despesas_gs_atualizado() # Salva no GS
-        st.success("Despesa adicionada com sucesso!")
-        return True
-    return False
-
-def exibir_tabela_despesas(name):
-    
-    # Lembre-se de usar CATEGORIAS_PREDEFINIDAS na configuração da AgGrid
-    # E de chamar salvar_despesas_gs_atualizado() após edições ou remoções.
-    if "despesas" not in st.session_state or not st.session_state["despesas"]:
-        st.info("Nenhuma despesa registrada.")
-        return
-
-    df_despesas_orig = pd.DataFrame(st.session_state["despesas"])
-
-    if df_despesas_orig.empty:
-        st.info("Nenhuma despesa registrada.")
-        return
-
-    df_despesas_orig["Data"] = pd.to_datetime(df_despesas_orig["Data"], errors='coerce')
-    df_despesas_orig["Valor"] = pd.to_numeric(df_despesas_orig["Valor"], errors='coerce').fillna(0.0)
-    df_despesas_orig["Valor"] = df_despesas_orig["Valor"].astype(float) 
-    df_despesas_orig["Categoria"] = df_despesas_orig["Categoria"].astype(str)
-
-    # 1) Ordena mas mantém o índice original
-    df_sorted = df_despesas_orig.sort_values(by="Data", ascending=False)
-    # 2) Guarda esse índice “real” em id_original
-    df_sorted["id_original"] = df_sorted.index
-    # 3) Agora reseta para exibição ao usuário
-    df_sorted = df_sorted.reset_index(drop=True)
-
-    df_display = df_sorted.copy()
-    df_display["Data"] = df_display["Data"].dt.strftime("%d/%m/%Y")
-    
-    cols_para_salvar = ["Data", "Categoria", "Valor", "Descricao", "Pagamento", "Usuario"]
-    cols_display_order = ["Data", "Categoria", "Valor", "Descricao", "Pagamento", "Usuario", "id_original"]
-    if not df_display.empty:
-        df_display = df_display[cols_display_order]
-    else: # Se df_display ficar vazio após algum processamento (improvável com as guardas)
-        st.info("Não há dados para exibir na tabela após o processamento.")
-        return
-
-
-    gb = GridOptionsBuilder.from_dataframe(df_display)
-    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=15)
-    
-    gb.configure_default_column(
-        editable=True, wrapText=False, resizable=True,
-        sortable=True, filter=True, cellStyle={"fontSize": "11px"}
-    )
-    
-    gb.configure_column("Data", header_name="📅 Data", editable=True, width=120)
-    gb.configure_column(
-        "Categoria", header_name="📂 Categoria", width=150,
-        cellEditor='agSelectCellEditor',
-        cellEditorParams={'values': CATEGORIAS_PREDEFINIDAS},
-        editable=True
-    )
-
-    formatador_moeda = (
-        'let valorCelula = data.Valor; '
-        'if (valorCelula == null || isNaN(valorCelula)) { '
-        '  return ""; '
-        '} else { '
-        '  let numeroFormatado = Number(valorCelula).toLocaleString("pt-BR", { '
-        '    minimumFractionDigits: 2, '
-        '    maximumFractionDigits: 2 '
-        '  }); '
-        '  return "R$ " + numeroFormatado; '
-        '}'
-    )
-    
-    gb.configure_column(
-        "Valor",
-        header_name="💵 Valor",
-        width=200,  # Pode reajustar a largura para o formato final
-        editable=True,
-        cellEditor='agNumberCellEditor',
-        # Adicionar 'type' pode ajudar a AgGrid a tratar a coluna internamente
-        type=["numericColumn", "numberColumnFilter"],
-        valueFormatter=formatador_moeda
-    )
-
-    gb.configure_column("Descricao", header_name="📝 Descrição", wrapText=True, autoHeight=True, width=250)
-
-    gb.configure_column(
-        "Pagamento", header_name="💳 Pagamento", width=100,
-        cellEditor='agSelectCellEditor',
-        cellEditorParams={'values': PAGAMENTO_PREDEFINIDO },
-        editable=True
-    )
-    gb.configure_column("Usuario", header_name="👤 Usuário", editable=False, width=100)
-    gb.configure_column("id_original", hide=True)
-
-    gb.configure_selection(selection_mode="multiple", use_checkbox=True, header_checkbox=True)
-    gb.configure_grid_options(domLayout="normal")
-
-    st.subheader("📊 Tabela de Despesas")
-    st.caption("Dê um duplo clique em uma célula para editar. As alterações são salvas automaticamente.")
-    
-    grid_response = AgGrid(
-        df_display, gridOptions=gb.build(), height=500, width='100%',
-        update_mode=GridUpdateMode.MODEL_CHANGED,
-        data_return_mode=DataReturnMode.AS_INPUT, 
-        fit_columns_on_grid_load=False, theme="alpine",
-        allow_unsafe_jscode=True, 
-        key="despesas_grid_ag_v5" # Chave pode ser incrementada ao mudar estrutura/formatters
-    )
-
-    data_retornada_grid = grid_response.get("data")
-    houve_alteracoes = False 
-
-    _selected_rows_data = grid_response.get("selected_rows", [])
-    selected_ids_to_remove = []
-    if isinstance(_selected_rows_data, list) and _selected_rows_data:
-        for row_dict in _selected_rows_data:
-            if row_dict and "id_original" in row_dict and row_dict["id_original"] is not None:
-                selected_ids_to_remove.append(int(row_dict["id_original"]))
-
-    if data_retornada_grid is not None:
-        processed_df_for_saving = None 
-        temp_df_from_grid = data_retornada_grid.copy()
-        
-        try:
-            temp_df_from_grid["Data"] = pd.to_datetime(temp_df_from_grid["Data"], format="%d/%m/%Y", errors="coerce")
-            temp_df_from_grid["Valor"] = pd.to_numeric(temp_df_from_grid["Valor"], errors='coerce').fillna(0.0)
-            temp_df_from_grid["Categoria"] = temp_df_from_grid["Categoria"].astype(str)
-
-            for col in cols_para_salvar: 
-                if col not in temp_df_from_grid.columns:
-                    if col == "Data": temp_df_from_grid[col] = pd.NaT
-                    elif col == "Valor": temp_df_from_grid[col] = 0.0
-                    else: temp_df_from_grid[col] = ""
-            
-            processed_df_for_saving = temp_df_from_grid[cols_para_salvar].copy()
-
-            if processed_df_for_saving is not None and not df_sorted.empty:
-                df_original_comparavel = df_sorted[cols_para_salvar].reset_index(drop=True).copy()
-                df_original_comparavel["Data"] = pd.to_datetime(df_original_comparavel["Data"])
-                df_original_comparavel["Valor"] = pd.to_numeric(df_original_comparavel["Valor"], errors='coerce').fillna(0.0).astype(float)
-                df_original_comparavel["Categoria"] = df_original_comparavel["Categoria"].astype(str)
-
-                df_editado_comparavel = processed_df_for_saving.reset_index(drop=True).copy()
-                df_editado_comparavel["Data"] = pd.to_datetime(df_editado_comparavel["Data"]) 
-                df_editado_comparavel["Valor"] = pd.to_numeric(df_editado_comparavel["Valor"], errors='coerce').fillna(0.0).astype(float)
-                df_editado_comparavel["Categoria"] = df_editado_comparavel["Categoria"].astype(str)
-
-                if not df_original_comparavel.equals(df_editado_comparavel):
-                    houve_alteracoes = True
         except Exception as e:
-            st.error(f"Erro ao processar dados editados da tabela: {e}")
-            houve_alteracoes = False
+            st.error(f"Erro ao limpar a planilha: {e}")
+            return False
 
-    if houve_alteracoes:
-        if processed_df_for_saving is not None:
-            st.session_state["despesas"] = processed_df_for_saving.to_dict(orient='records')
-            salvar_despesas_gs_atualizado() 
-            st.rerun()
-
-    _selected_rows_data = grid_response.get("selected_rows", []) 
-    selected_ids_to_remove = []
-
-    if isinstance(_selected_rows_data, pd.DataFrame):
-        if not _selected_rows_data.empty:
-            if "id_original" in _selected_rows_data.columns:
-                selected_ids_to_remove = _selected_rows_data["id_original"].dropna().astype(int).tolist()
-    elif isinstance(_selected_rows_data, list):
-        if _selected_rows_data: 
-            temp_ids = []
-            for row_dict in _selected_rows_data:
-                if row_dict and isinstance(row_dict, dict) and "id_original" in row_dict and row_dict["id_original"] is not None:
-                    temp_ids.append(int(row_dict["id_original"]))
-            selected_ids_to_remove = temp_ids
-    
-    # Dentro de exibir_tabela_despesas, no bloco do botão de remover:
-    if st.button("🗑️ Remover Selecionada(s) da Planilha", disabled=not selected_ids_to_remove, key="btn_remover_despesas_v_final_teste"):
-        if selected_ids_to_remove:
-        
-            df_temp = df_sorted.copy()
+    try:
+        worksheet = client.open(sheet_name).worksheet(worksheet_name)
+        # Manter o backup é uma boa prática caso a escrita falhe.
+        backup = worksheet.get_all_values()
+        try:
+            # --- ESTA É A CORREÇÃO PRINCIPAL ---
+            # 1. Limpa completamente a planilha antes de escrever os novos dados.
+            worksheet.clear()
             
-            try:
-                df_temp.drop(index=selected_ids_to_remove, inplace=True)
-            except KeyError as e:
-                st.error(f"KeyError ao tentar remover linha(s) {selected_ids_to_remove}: {e}")
-                st.stop()
+            # 2. Prepara os dados (cabeçalho + linhas) e os escreve na planilha agora vazia.
+            data = [df.columns.tolist()] + df.astype(str).values.tolist()
+            worksheet.update(data, value_input_option="USER_ENTERED")
+            return True
+        except Exception as e:
+            # Se a escrita falhar, tenta restaurar o backup.
+            st.error(f"Erro ao salvar dados. Restaurando backup... Erro: {e}")
+            worksheet.clear() # Limpa qualquer escrita parcial.
+            worksheet.update(backup) # Escreve os dados do backup de volta.
+            return False
+    except Exception as e:
+        st.error(f"Erro geral ao interagir com o Google Sheets: {e}")
+        return False
 
-            # Prepara para salvar (remove a coluna auxiliar)
-            df_temp_to_save = df_temp.drop(columns=["id_original"], errors="ignore")
-            nova_lista_despesas = df_temp_to_save.to_dict(orient="records")
-            st.session_state["despesas"] = nova_lista_despesas
+# ======================== UTILS ========================
+def safe_parse_value(value):
+    """
+    Converte de forma segura um valor para float, tratando também
+    casos de NaN (Not a Number) que podem vir do frontend.
+    """
+    # Trata explicitamente valores nulos ou NaN que podem vir do AgGrid
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return 0.0
+    
+    # Se já for um número, apenas retorna
+    if isinstance(value, (int, float)):
+        return round(value, 2)
 
-            gs_save_succeeded = salvar_despesas_gs_atualizado()
-            if gs_save_succeeded:
-                # Força recarregar da planilha na próxima execução
-                if "despesas" in st.session_state:
-                    del st.session_state["despesas"]
-                st.success(f"{len(selected_ids_to_remove)} despesa(s) removida(s) com êxito.")
-            else:
-                st.error("Falha ao atualizar no Google Sheets. Verifique logs do update_worksheet.")
+    # Se for um texto, usa a conversão por locale
+    if isinstance(value, str):
+        if not value.strip():
+            return 0.0
+        try:
+            return round(locale.atof(value), 2)
+        except (ValueError, TypeError):
+            return 0.0
+            
+    return 0.0
 
-            st.rerun()
-        else:
-            st.warning("Nenhuma linha selecionada para remoção.")
+def are_dataframes_equal(df1, df2):
+    # Se os dataframes não tiverem o mesmo formato, são diferentes
+    if df1.shape != df2.shape or list(df1.columns) != list(df2.columns):
+        return False
+    
+    # Compara os dataframes usando o método nativo do pandas, que é mais seguro
+    return df1.equals(df2)
 
-# 5. Função Principal (main)
-def main():
-    # st.set_page_config() JÁ FOI MOVIDO PARA O TOPO DO SCRIPT
 
-    # Ocultar "Made with Streamlit" e menu principal (opcional, mas você tinha antes)
-    hide_streamlit_style = """
-                <style>
-                #MainMenu {visibility: hidden;}
-                footer {visibility: hidden;}
-                header {visibility: hidden;}
-                </style>
-                """
-    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+# ======================== AUTENTICAÇÃO ========================
+def authenticate_user():
+    # Pega os usuários diretamente do st.secrets
+    try:
+        users = st.secrets["usuarios"]
+    except Exception as e:
+        st.error("Erro Crítico: Não foi possível carregar a configuração de usuários a partir dos Segredos do Streamlit.")
+        st.info("Verifique se a seção [usuarios] foi configurada corretamente nos Segredos do seu aplicativo.")
+        return None, False
 
-    nome_usuario, autenticado = autenticar_usuario()
-    if not autenticado:
-        st.stop() # Para a execução se não estiver autenticado
+    # Inicializa o estado de autenticação se não existir
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
 
-    # Carrega as despesas após a autenticação bem-sucedida e se o cliente GS estiver disponível
-    if g_sheets_client_global: # Verifica se o cliente foi inicializado
-        carregar_despesas()
+    # Se o usuário não estiver autenticado, mostra a tela de login
+    if not st.session_state.authenticated:
+        
+        # --- ESTRUTURA DE LAYOUT PARA CENTRALIZAR O LOGIN ---
+        # Cria 3 colunas, usaremos a do meio para o conteúdo
+        _, col_central, _ = st.columns([1, 1.5, 1])
+
+        with col_central:
+            # --- CONTAINER PARA O "CARTÃO DE LOGIN" ---
+            # O border=True cria uma caixa visualmente separada
+            with st.container(border=True):
+                
+                # Opcional: Adicione sua logo aqui
+                # st.image("caminho/para/sua/logo.png", width=150)
+                
+                st.markdown("<h2 style='text-align: center;'>Bem-vindo ao FinApp</h2>", unsafe_allow_html=True)
+                
+                # Formulário de login
+                with st.form("login_form"):
+                    st.text_input("Usuário", key="user_input")
+                    st.text_input("Senha", type="password", key="password_input")
+                    
+                    # Botão de submit que ocupa a largura toda do container
+                    submitted = st.form_submit_button("Entrar", use_container_width=True)
+
+                    if submitted:
+                        # Adiciona um spinner para dar feedback visual durante a verificação
+                        with st.spinner("Verificando credenciais..."):
+                            user = st.session_state.user_input
+                            pw = st.session_state.password_input
+
+                            if user in users and users[user]["senha"] == pw:
+                                st.session_state.authenticated = True
+                                st.session_state.user_display = users[user]["nome"]
+                                # Limpa os campos de input do estado da sessão
+                                del st.session_state.user_input
+                                del st.session_state.password_input
+                                st.rerun()
+                            else:
+                                st.error("Usuário ou senha incorretos.")
+        
+        # Se chegou até aqui, não está autenticado
+        return None, False
+
+    # Se já passou do "if" acima, significa que está autenticado
+    return st.session_state.user_display, True
+
+# ======================== FUNÇÕES PRINCIPAIS ========================
+def load_expenses():
+    client = get_sheets_client()
+    df = read_sheet_data(client, SHEET_NAME, WORKSHEET_NAME)
+    if df.empty:
+        df = pd.DataFrame(columns=["Data", "Categoria", "Valor", "Descricao", "Pagamento", "Usuario", "id_original"])
     else:
-        st.error("Cliente Google Sheets não pôde ser inicializado. Funcionalidades de dados estarão desabilitadas.")
-        st.session_state["despesas"] = [] # Garante que 'despesas' exista mesmo com erro
+        if "Valor" in df.columns:
+            df["Valor"] = df["Valor"].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+            df["Valor"] = pd.to_numeric(df["Valor"], errors='coerce').fillna(0).round(2)
+        
+        if "Data" in df.columns:
+            df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 
-    with st.sidebar:
-        st.success(f"Logado como: {nome_usuario}")
-        if st.button("🚪 Logout", key="logout_btn"):
-            keys_to_clear = ["usuario_autenticado", "nome_usuario", "despesas"]
-            for key in keys_to_clear:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
-        st.divider()
-        st.title("💸 FinApp")
-        aba = st.radio(
-            "Navegação", 
-            ["💰 Despesas", "📊 Resumo (em breve)"], 
-            captions=["Lançar e ver despesas.", "Visualizar gráficos e totais."],
-            key="nav_radio"
+    st.session_state["expenses_df"] = df
+
+
+def save_expenses():
+    client = get_sheets_client()
+    df = st.session_state.get("expenses_df", pd.DataFrame()).copy()
+    if df.empty or len(df) < 1:
+        st.warning("Nenhuma despesa para salvar ou DataFrame inconsistente.")
+        return False
+    # ✅ Garante que a coluna "Data" está no formato datetime
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df["Data"] = df["Data"].dt.strftime("%Y-%m-%d")
+    df["Valor"] = df["Valor"].apply(lambda x: f"{x:.2f}".replace(".", ","))
+    return write_sheet_data(client, SHEET_NAME, WORKSHEET_NAME, df)
+
+
+def get_next_id():
+    df = st.session_state.get("expenses_df", pd.DataFrame())
+    return int(df["id_original"].max()) + 1 if not df.empty else 0
+
+def render_new_expense_form(user_display):
+    st.checkbox(
+        "É uma despesa recorrente?", 
+        key="recorrente_checkbox", 
+        value=st.session_state.get("recorrente_checkbox", False)
+    )
+
+    with st.form("new_expense"):
+        # AGORA
+        data = st.date_input(
+            "Data da despesa", 
+            value=date.today(),
+            format="DD/MM/YYYY"
+        )
+        valor = st.number_input("Valor (R$)", min_value=10.00, step=1.00, format="%.2f")
+        categoria = st.selectbox("Categoria", CATEGORIAS_PREDEFINIDAS)
+        pagamento = st.radio("Pagamento", PAGAMENTO_PREDEFINIDO, horizontal=True)
+        descricao = st.text_input("Descrição")
+
+        quantidade_parcelas = 1
+        if st.session_state.get("recorrente_checkbox"):
+            quantidade_parcelas = st.number_input(
+                "Número de parcelas (incluindo a atual)", 
+                min_value=2, 
+                max_value=60,
+                value=2, 
+                step=1,
+                key="quantidade_parcelas"
+            )
+
+        submitted = st.form_submit_button("Adicionar")
+
+        if submitted:
+            is_recorrente = st.session_state.get("recorrente_checkbox", False)
+            
+            if is_recorrente:
+                num_parcelas = st.session_state.get("quantidade_parcelas", 2)
+            else:
+                num_parcelas = 1
+
+            despesas_para_adicionar = []
+            proximo_id = get_next_id()
+
+            for i in range(num_parcelas):
+                data_parcela = data + relativedelta(months=i)
+                descricao_parcela = descricao
+                if is_recorrente and num_parcelas > 1: # Só adiciona a contagem se for mais de 1 parcela
+                    descricao_parcela = f"{descricao} ({i+1}/{num_parcelas})"
+
+                nova_despesa = {
+                    "Data": pd.to_datetime(data_parcela), "Categoria": categoria, "Valor": valor,
+                    "Descricao": descricao_parcela, "Pagamento": pagamento, "Usuario": user_display,
+                    "id_original": proximo_id + i
+                }
+                despesas_para_adicionar.append(nova_despesa)
+
+            novas_despesas_df = pd.DataFrame(despesas_para_adicionar)
+            st.session_state["expenses_df"] = pd.concat(
+                [st.session_state["expenses_df"], novas_despesas_df], ignore_index=True)
+            
+            # A LINHA QUE CAUSAVA O ERRO FOI REMOVIDA DAQUI.
+            # st.session_state.recorrente_checkbox = False # <-- REMOVIDA
+
+            if save_expenses():
+                st.success(f"{num_parcelas} despesa(s) adicionada(s) com sucesso!")
+
+                # --- MUDANÇA PRINCIPAL ---
+                # Em vez de tentar alterar o estado do checkbox aqui,
+                # nós apenas definimos uma "flag" para a próxima execução.
+                st.session_state.submission_success = True
+                # -------------------------
+
+                read_sheet_data.clear()
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("Erro ao salvar despesa.")
+
+def render_expense_table(df_para_exibir):
+    
+    if df_para_exibir.empty:
+        st.info("Nenhuma despesa para exibir com os filtros atuais.")
+        return
+    
+    # --- Formulário Único para Edição, Salvamento e Exclusão ---
+    with st.form("main_form"):
+        st.subheader("Tabela de Despesas")
+        st.caption("Você pode editar as células diretamente. Ao final, clique em Salvar ou Excluir.")
+
+        gb = GridOptionsBuilder.from_dataframe(df_para_exibir)
+        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+
+        # 1. VALUE GETTER: Prepara o valor para a CÉLULA DE EDIÇÃO.
+        # Pega o número (ex: 200.5) e formata como texto com vírgula (ex: "200,50").
+        js_value_getter = JsCode("""
+            function(params) {
+                if (params.data && typeof params.data.Valor === 'number') {
+                    return params.data.Valor.toFixed(2).replace('.', ',');
+                }
+                return params.data.Valor;
+            }
+        """)
+
+        # 2. VALUE FORMATTER: Formata o valor para a CÉLULA DE VISUALIZAÇÃO.
+        # Adiciona o "R$" para quando a célula não está sendo editada.
+        js_value_formatter = JsCode("""
+            function(params) {
+                if (typeof params.value === 'number') {
+                    return 'R$ ' + params.value.toFixed(2).replace('.', ',');
+                }
+                return params.value;
+            }
+        """)
+
+        # 3. VALUE PARSER: "Entende" o que o usuário digita na edição.
+        # Pega o texto (ex: "200,50") e converte de volta para um número (ex: 200.5).
+        js_value_parser = JsCode("""
+            function(params) {
+                let value = params.newValue;
+                if (value === null || value === undefined || value === '') { return 0; }
+                let clean_string = String(value).replace(/\./g, '').replace(',', '.');
+                let number = parseFloat(clean_string);
+                return isNaN(number) ? params.oldValue : number;
+            }
+        """)
+
+        gb.configure_column("Valor", 
+            type=["numericColumn", 
+                    "numberColumnFilter", 
+                    "customNumericFormat"], 
+            precision=2, 
+            editable=True, 
+            valueGetter=js_value_getter,      
+            valueParser=js_value_parser,
+            valueFormatter=js_value_formatter
+        )
+        
+        gb.configure_column("Data", type=["dateColumnFilter", "customDateTimeFormat"], custom_format_string='dd/MM/yyyy', editable=True)
+        gb.configure_column("Categoria", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': CATEGORIAS_PREDEFINIDAS})
+        gb.configure_column("Pagamento", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': PAGAMENTO_PREDEFINIDO})
+        gb.configure_column("Descricao", editable=True)
+        gb.configure_column("Usuario", editable=False)
+        gb.configure_column("id_original", hide=True)
+        
+        grid_options = gb.build()
+
+        grid_return = AgGrid(
+            df_para_exibir,
+            theme='alpine',
+            gridOptions=grid_options,
+            key='stable_expense_grid',
+            update_mode=GridUpdateMode.MODEL_CHANGED,
+            data_return_mode=DataReturnMode.AS_INPUT,
+            allow_unsafe_jscode=True,
+            enable_enterprise_modules=False,
+            height=400,
+            reload_data=True  # <--- ADICIONE ESTA LINHA
         )
 
-    if aba == "💰 Despesas":
-        st.header("Lançamento e Gestão de Despesas")
-        col_form, col_spacer, col_table_actions = st.columns([0.8, 0.1, 2])
-        with col_form:
-            if exibir_formulario_despesa(nome_usuario):
-                st.rerun() 
-        with col_table_actions:
-            if g_sheets_client_global: # Só exibe a tabela se o cliente GS estiver ok
-                exibir_tabela_despesas(nome_usuario)
-            else:
-                st.warning("A tabela de despesas não pode ser exibida pois a conexão com o Google Sheets falhou.")
-    
-    elif aba == "📊 Resumo (em breve)":
-        st.header("Resumo Financeiro")
-        st.info("Funcionalidade de resumo e gráficos será implementada aqui.")
+        # Botões de ação dentro do mesmo formulário
+        col1, col2, _ = st.columns([1, 1, 3])
+        with col1:
+            save_pressed = st.form_submit_button("✔️ Salvar Alterações")
+        with col2:
+            delete_pressed = st.form_submit_button("❌ Excluir Selecionadas")
 
-# 6. Ponto de Entrada Principal
+
+    # --- Lógica de Ação (só roda quando um dos botões do formulário é clicado) ---
+
+    if save_pressed:
+        updated_df = grid_return['data'].copy()
+        updated_df['Valor'] = updated_df['Valor'].apply(safe_parse_value)
+        updated_df["Data"] = pd.to_datetime(updated_df["Data"], errors="coerce")
+        
+        # Aqui, precisamos mesclar as mudanças de volta no dataframe principal
+        # que está no session_state antes de salvar, para não perder os dados não filtrados.
+        df_completo = st.session_state['expenses_df'].copy()
+        updated_df.set_index('id_original', inplace=True)
+        df_completo.set_index('id_original', inplace=True)
+        df_completo.update(updated_df)
+        df_completo.reset_index(inplace=True)
+        st.session_state['expenses_df'] = df_completo
+        
+        if save_expenses():
+            st.success("Alterações salvas com sucesso!")
+            read_sheet_data.clear()
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("Erro ao salvar alterações.")
+
+    if delete_pressed:
+        selected_rows = grid_return['selected_rows']
+        if not selected_rows:
+            st.warning("Nenhuma linha selecionada para exclusão.")
+            return
+
+        ids_para_excluir = [row['id_original'] for row in selected_rows]
+        
+        df_completo = st.session_state['expenses_df'].copy()
+        df_apos_exclusao = df_completo.query("id_original not in @ids_para_excluir")
+        
+        st.session_state["expenses_df"] = df_apos_exclusao
+        if save_expenses():
+            st.success("Despesas excluídas com sucesso!")
+            read_sheet_data.clear()
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("Erro ao excluir despesas.")
+
+# ======================== FILTROS ========================
+
+from datetime import datetime
+
+from datetime import datetime
+
+def setup_filtros(df, usuario_logado):
+    st.sidebar.header("Filtros")
+
+    if df.empty:
+        st.sidebar.warning("Nenhuma despesa cadastrada para filtrar.")
+        return df, "Todos", "Todos"
+
+    df['Data'] = pd.to_datetime(df['Data'])
+    
+    # --- OPÇÕES DOS FILTROS ---
+    anos_disponiveis = ["Todos"] + sorted(df['Data'].dt.year.unique(), reverse=True)
+    meses_nomes = ["Todos", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    meses_map = {nome: i for i, nome in enumerate(meses_nomes)}
+
+    # --- INICIALIZAÇÃO INTELIGENTE DO ESTADO DOS FILTROS ---
+    # Este bloco só roda na primeira vez que o app carrega, definindo os padrões.
+    if 'filtro_ano' not in st.session_state:
+        st.session_state.filtro_ano = datetime.now().year
+    if 'filtro_mes' not in st.session_state:
+        st.session_state.filtro_mes = meses_nomes[datetime.now().month] # Pega o nome do mês atual, ex: "Junho"
+    if 'filtro_usuario' not in st.session_state:
+        st.session_state.filtro_usuario = usuario_logado
+    # ----------------------------------------------------
+
+    # --- WIDGETS DE FILTRO COM 'key' PARA MEMORIZAR A ESCOLHA ---
+    # O Streamlit usará o valor em st.session_state para definir a seleção padrão.
+    ano_selecionado = st.sidebar.selectbox("Ano", anos_disponiveis, key="filtro_ano")
+    mes_selecionado_nome = st.sidebar.selectbox("Mês", meses_nomes, key="filtro_mes")
+    
+    usuarios_disponiveis = ["Todos"] + sorted(df['Usuario'].unique().tolist())
+    usuario_selecionado = st.sidebar.selectbox("Usuário", usuarios_disponiveis, key="filtro_usuario")
+    # ------------------------------------------------------------
+    
+    # --- APLICAÇÃO DOS FILTROS DE FORMA CONDICIONAL ---
+    mes_selecionado_num = meses_map[mes_selecionado_nome]
+
+    df_filtrado = df.copy() # Começa com o dataframe completo
+
+    if ano_selecionado != "Todos":
+        df_filtrado = df_filtrado[df_filtrado['Data'].dt.year == ano_selecionado]
+
+    if mes_selecionado_num != 0: # 0 é o valor para "Todos"
+        df_filtrado = df_filtrado[df_filtrado['Data'].dt.month == mes_selecionado_num]
+
+    # Aplica o novo filtro de usuário
+    if usuario_selecionado != "Todos":
+        df_filtrado = df_filtrado[df_filtrado['Usuario'] == usuario_selecionado]
+
+    # --- FILTRO DE CATEGORIA (APLICADO SOBRE O RESULTADO ANTERIOR) ---
+    if not df_filtrado.empty:
+        categorias_unicas = ["Todas"] + sorted(df_filtrado['Categoria'].unique())
+        categorias_selecionadas = st.sidebar.multiselect("Categorias", categorias_unicas, default=["Todas"])
+        
+        if "Todas" not in categorias_selecionadas:
+            df_filtrado = df_filtrado[df_filtrado['Categoria'].isin(categorias_selecionadas)]
+    
+    return df_filtrado, ano_selecionado, mes_selecionado_num
+
+# ======================== GRÁFICOS ========================
+def render_dashboard(df):
+    st.subheader("Dashboard de Despesas")
+
+    # 1. Métricas Principais (KPIs)
+    total_gasto = df['Valor'].sum()
+    media_por_transacao = df['Valor'].mean()
+    categoria_mais_cara = df.groupby('Categoria')['Valor'].sum().idxmax()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Gasto", f"R$ {total_gasto:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    col2.metric("Média por Transação", f"R$ {media_por_transacao:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    col3.metric("Categoria Principal", categoria_mais_cara)
+    
+    st.markdown("---")
+
+    # 2. Gráficos
+    col_graf1, col_graf2 = st.columns(2)
+
+    with col_graf1:
+        st.subheader("Gastos por Categoria")
+        gastos_por_categoria = df.groupby('Categoria')['Valor'].sum().sort_values(ascending=False)
+        fig_cat = px.bar(
+            gastos_por_categoria,
+            x=gastos_por_categoria.index,
+            y=gastos_por_categoria.values,
+            title="Total Gasto por Categoria",
+            labels={'x': 'Categoria', 'y': 'Valor Gasto (R$)'},
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_cat, use_container_width=True)
+
+    with col_graf2:
+        st.subheader("Evolução dos Gastos")
+        # Certifique-se que a coluna 'Data' é do tipo datetime
+        df['Data'] = pd.to_datetime(df['Data'])
+        gastos_por_dia = df.groupby(df['Data'].dt.date)['Valor'].sum()
+        fig_dia = px.line(
+            x=gastos_por_dia.index,
+            y=gastos_por_dia.values,
+            title="Gastos por Dia",
+            labels={'x': 'Data', 'y': 'Valor Gasto (R$)'},
+            markers=True
+        )
+        fig_dia.update_layout(template="plotly_white")
+        st.plotly_chart(fig_dia, use_container_width=True)
+
+# ======================== DASHBOARD ANÁLISE MENSAL ========================
+meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+               "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+def render_dashboard_analise_mensal(df, ano, mes):
+    st.header(f"Análise de {meses_nomes[mes-1]}/{ano}")
+
+    # Filtra dados para o mês atual e o anterior
+    data_inicio_mes_atual = datetime(ano, mes, 1)
+    data_fim_mes_atual = data_inicio_mes_atual + relativedelta(months=1) - relativedelta(days=1)
+    data_inicio_mes_anterior = data_inicio_mes_atual - relativedelta(months=1)
+
+    df_mes_atual = df[(df['Data'] >= pd.to_datetime(data_inicio_mes_atual)) & (df['Data'] <= pd.to_datetime(data_fim_mes_atual))]
+    df_mes_anterior = df[(df['Data'] >= pd.to_datetime(data_inicio_mes_anterior)) & (df['Data'] < pd.to_datetime(data_inicio_mes_atual))]
+
+    if df_mes_atual.empty:
+        st.warning("Nenhum dado encontrado para o mês selecionado.")
+        return
+
+    # 1. KPIs Comparativos
+    total_atual = df_mes_atual['Valor'].sum()
+    total_anterior = df_mes_anterior['Valor'].sum()
+    delta = ((total_atual - total_anterior) / total_anterior * 100) if total_anterior > 0 else 0
+
+    col1, col2 = st.columns(2)
+    col1.metric(f"Total Gasto em {meses_nomes[mes-1]}", f"R$ {total_atual:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    col2.metric("Total Gasto no Mês Anterior", f"R$ {total_anterior:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), f"{delta:,.2f}%")
+
+    st.markdown("---")
+
+    # 2. Gráficos
+    col_graf1, col_graf2 = st.columns(2)
+
+    with col_graf1:
+        st.subheader("Comparativo por Categoria")
+        gastos_cat_atual = df_mes_atual.groupby('Categoria')['Valor'].sum()
+        gastos_cat_anterior = df_mes_anterior.groupby('Categoria')['Valor'].sum()
+
+        df_comp = pd.DataFrame({'Mês Atual': gastos_cat_atual, 'Mês Anterior': gastos_cat_anterior}).fillna(0)
+
+        fig = go.Figure(data=[
+            go.Bar(name='Mês Anterior', x=df_comp.index, y=df_comp['Mês Anterior']),
+            go.Bar(name='Mês Atual', x=df_comp.index, y=df_comp['Mês Atual'])
+        ])
+        fig.update_layout(barmode='group', template="plotly_white", title_text="Categoria vs. Categoria (Mês Anterior e Atual)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_graf2:
+        st.subheader("Composição dos Gastos")
+        gastos_categoria = df_mes_atual.groupby('Categoria')['Valor'].sum()
+        fig_donut = go.Figure(data=[go.Pie(labels=gastos_categoria.index, values=gastos_categoria.values, hole=.4)])
+        fig_donut.update_layout(template="plotly_white", title_text=f"Gastos por Categoria em {meses_nomes[mes-1]}")
+        st.plotly_chart(fig_donut, use_container_width=True)
+
+# ======================== DASHBOARD TENDÊNCIAS ========================
+def render_dashboard_tendencias(df):
+    st.header("Análise de Tendências (Últimos 12 Meses)")
+
+    # Filtra dados para os últimos 12 meses
+    doze_meses_atras = datetime.now() - relativedelta(months=12)
+    df_ultimos_12_meses = df[df['Data'] >= pd.to_datetime(doze_meses_atras)]
+
+    # Prepara os dados, agrupando por Ano/Mês
+    df_ultimos_12_meses['AnoMes'] = df_ultimos_12_meses['Data'].dt.to_period('M')
+    gastos_mensais = df_ultimos_12_meses.groupby('AnoMes')['Valor'].sum().sort_index()
+    gastos_mensais.index = gastos_mensais.index.to_timestamp() # Converte para data para o gráfico
+
+    # 1. Gráfico de Linha Principal
+    fig = px.line(
+        x=gastos_mensais.index, y=gastos_mensais.values,
+        title="Evolução Mensal do Gasto Total",
+        labels={'x': 'Mês', 'y': 'Valor Gasto (R$)'}, markers=True
+    )
+    fig.update_layout(template="plotly_white")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # 2. Gráfico de Linha Interativo por Categoria
+    st.subheader("Análise Detalhada por Categoria")
+    categorias_unicas = sorted(df_ultimos_12_meses['Categoria'].unique())
+    categorias_selecionadas = st.multiselect("Selecione as categorias para comparar:", categorias_unicas, default=categorias_unicas[:3])
+
+    if categorias_selecionadas:
+        df_filtrado_cat = df_ultimos_12_meses[df_ultimos_12_meses['Categoria'].isin(categorias_selecionadas)]
+        gastos_mensais_cat = df_filtrado_cat.groupby(['AnoMes', 'Categoria'])['Valor'].sum().unstack(fill_value=0).sort_index()
+        gastos_mensais_cat.index = gastos_mensais_cat.index.to_timestamp()
+
+        fig2 = px.line(
+            gastos_mensais_cat, x=gastos_mensais_cat.index, y=gastos_mensais_cat.columns,
+            title="Evolução Mensal por Categoria Selecionada",
+            labels={'x': 'Mês', 'value': 'Valor Gasto (R$)', 'variable': 'Categoria'}, markers=True
+        )
+        fig2.update_layout(template="plotly_white")
+        st.plotly_chart(fig2, use_container_width=True)
+
+# ======================== DASHBOARD VISÃO DETALHADA ========================
+def render_dashboard_deep_dive(df):
+    st.header("Visão Detalhada dos Gastos")
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        # 1. Treemap
+        st.subheader("Composição por Categoria (Treemap)")
+        gastos_categoria = df.groupby('Categoria')['Valor'].sum().reset_index()
+        fig = px.treemap(
+            gastos_categoria, path=['Categoria'], values='Valor',
+            title='Área de cada categoria proporcional ao gasto',
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+            st.subheader("Top 10 Maiores Despesas")
+            # A lógica para obter o top 10 continua a mesma
+            top_10 = df.sort_values('Valor', ascending=False).head(10)
+
+            # 1. Cria uma cópia do DataFrame para formatação de exibição.
+            top_10_para_exibir = top_10.copy()
+
+            # 2. Formata a coluna de Data para o padrão dd/mm/yyyy.
+            top_10_para_exibir['Data'] = top_10_para_exibir['Data'].dt.strftime('%d/%m/%Y')
+            
+            # 3. Formata a coluna de Valor para o padrão de moeda brasileira.
+            #    Isso funciona porque já definimos o locale para pt_BR no início do script.
+            top_10_para_exibir['Valor'] = top_10_para_exibir['Valor'].apply(
+                lambda x: locale.currency(x, grouping=True)
+            )
+            
+            # 4. Exibe o DataFrame já formatado, sem precisar do column_config.
+            st.dataframe(
+                top_10_para_exibir[['Data', 'Descricao', 'Valor']],
+                use_container_width=True,
+                hide_index=True
+            )
+
+    st.markdown("---")
+
+    # 3. Gráfico de Barras Empilhadas
+    st.subheader("Forma de Pagamento por Categoria")
+    gastos_pagamento = df.groupby(['Categoria', 'Pagamento'])['Valor'].sum().unstack(fill_value=0)
+    fig2 = px.bar(
+        gastos_pagamento, x=gastos_pagamento.index, y=gastos_pagamento.columns,
+        title="Como você paga por cada categoria?",
+        labels={'x': 'Categoria', 'value': 'Valor Gasto (R$)', 'variable': 'Forma de Pagamento'},
+        template="plotly_white"
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+# ======================== MAIN ========================
+def main():
+    
+    # --- BLOCO DE RESET (EXECUTADO PRIMEIRO) ---
+    # Verifica se a "bandeira" foi levantada na execução anterior.
+    if st.session_state.get("submission_success", False):
+        # Abaixa a bandeira para que este bloco não rode novamente sem necessidade.
+        st.session_state.submission_success = False
+        
+        # Agora é seguro resetar o estado do checkbox, pois o widget ainda não foi desenhado.
+        st.session_state.recorrente_checkbox = False
+        
+        # Força um último rerun para garantir que a página seja redesenhada com o checkbox desmarcado.
+        st.rerun()
+    # --------------------------------------------
+
+
+    user_display, is_auth = authenticate_user()
+    if not is_auth:
+        return
+    if "expenses_df" not in st.session_state:
+        load_expenses()
+
+    # Pega o dataframe da sessão
+    df_completo = st.session_state["expenses_df"]
+
+    # --- INTEGRAÇÃO DAS MELHORIAS ---
+    
+    # 1. Aplica os filtros da barra lateral para obter o DF filtrado
+    df_filtrado, ano_selecionado, mes_selecionado_num = setup_filtros(df_completo, user_display)
+
+    st.sidebar.title("FinApp")
+    st.sidebar.markdown(f"Bem-vindo, {user_display}")
+    
+    if st.sidebar.button("Logout"):
+        for k in ["authenticated", "user_display", "expenses_df"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+    st.title("💰 Controle de Despesas")
+
+    # --- NOVA ESTRUTURA COM ABAS PRINCIPAIS ---
+    tab_dashboard, tab_lancamentos = st.tabs(["📊 Dashboards", "✍️ Lançamentos"])
+
+    with tab_dashboard:
+        st.header("Análise Visual de Gastos")
+
+        # --- LÓGICA DO SELETOR DE DASHBOARD ---
+        # Define as opções de dashboard disponíveis
+        opcoes_dashboard = ["Análise de Tendências", "Visão Detalhada"]
+        # Só adiciona a opção de "Análise Mensal" se um mês e ano específicos foram selecionados
+        if ano_selecionado != "Todos" and mes_selecionado_num != 0:
+            opcoes_dashboard.insert(0, "Análise Mensal")
+
+        dashboard_selecionado = st.selectbox(
+            "Escolha uma visão de análise:",
+            opcoes_dashboard
+        )
+        
+        # Renderiza o dashboard escolhido
+        if dashboard_selecionado == "Análise Mensal":
+            render_dashboard_analise_mensal(df_completo, ano_selecionado, mes_selecionado_num)
+        elif dashboard_selecionado == "Análise de Tendências":
+            render_dashboard_tendencias(df_completo) # Tendências usa o DF completo
+        elif dashboard_selecionado == "Visão Detalhada":
+            render_dashboard_deep_dive(df_filtrado) # Visão detalhada usa o DF já filtrado
+
+    with tab_lancamentos:
+        st.header("Gerenciar Despesas")
+        
+        # Abas aninhadas para Adicionar e Ver a Tabela
+        tab_adicionar, tab_tabela = st.tabs(["Adicionar Nova Despesa", "Ver Tabela Detalhada"])
+
+        with tab_adicionar:
+            render_new_expense_form(user_display)
+
+        with tab_tabela:
+            render_expense_table(df_filtrado)
+
 if __name__ == "__main__":
     main()
