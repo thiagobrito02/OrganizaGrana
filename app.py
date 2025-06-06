@@ -24,14 +24,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# A configuração de locale continua importante
-try:
-    # Tenta configurar para o padrão Linux/macOS, abrangendo todas as categorias (moeda, números, etc.)
-    locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
-except locale.Error:
-    # Se falhar, tenta configurar para o padrão Windows
-    locale.setlocale(locale.LC_ALL, 'Portuguese_Brazil.1252')
-# --------
 
 # ======================== CSS ========================
 CUSTOM_CSS = """
@@ -122,28 +114,34 @@ def write_sheet_data(client, sheet_name, worksheet_name, df):
         return False
 
 # ======================== UTILS ========================
+
+def format_currency_brl(value):
+    """Formata um número para o padrão de moeda brasileiro (R$ 1.234,56)"""
+    if not isinstance(value, (int, float)):
+        return "R$ 0,00"
+    # Formata o número com separador de milhar (,) e 2 casas decimais (.)
+    # Ex: 1234.56 -> "1,234.56"
+    valor_formatado = f"{value:,.2f}"
+    # Troca os separadores para o padrão brasileiro
+    # "1,234.56" -> "1.234,56"
+    valor_formatado_br = valor_formatado.replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {valor_formatado_br}"
+
 def safe_parse_value(value):
-    """
-    Converte de forma segura um valor para float, tratando também
-    casos de NaN (Not a Number) que podem vir do frontend.
-    """
-    # Trata explicitamente valores nulos ou NaN que podem vir do AgGrid
+    """Converte de forma segura um valor que pode ser um texto em pt-BR para float."""
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return 0.0
-    
-    # Se já for um número, apenas retorna
     if isinstance(value, (int, float)):
         return round(value, 2)
-
-    # Se for um texto, usa a conversão por locale
     if isinstance(value, str):
         if not value.strip():
             return 0.0
         try:
-            return round(locale.atof(value), 2)
+            # Substitui o ponto de milhar por nada e a vírgula de decimal por ponto
+            clean_str = value.replace('.', '').replace(',', '.')
+            return round(float(clean_str), 2)
         except (ValueError, TypeError):
             return 0.0
-            
     return 0.0
 
 def are_dataframes_equal(df1, df2):
@@ -596,8 +594,8 @@ def render_dashboard_analise_mensal(df, ano, mes):
     delta = ((total_atual - total_anterior) / total_anterior * 100) if total_anterior > 0 else 0
 
     col1, col2 = st.columns(2)
-    col1.metric(f"Total Gasto em {meses_nomes[mes-1]}", f"R$ {total_atual:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    col2.metric("Total Gasto no Mês Anterior", f"R$ {total_anterior:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), f"{delta:,.2f}%")
+    col1.metric(f"Total Gasto em {meses_nomes[mes-1]}", format_currency_brl(total_atual))
+    col2.metric("Total Gasto no Mês Anterior", format_currency_brl(total_anterior), f"{delta:,.2f}%")
 
     st.markdown("---")
 
@@ -697,13 +695,11 @@ def render_dashboard_deep_dive(df):
             
             # 3. Formata a coluna de Valor para o padrão de moeda brasileira.
             #    Isso funciona porque já definimos o locale para pt_BR no início do script.
-            top_10_para_exibir['Valor'] = top_10_para_exibir['Valor'].apply(
-                lambda x: locale.currency(x, grouping=True)
-            )
+            top_10_para_exibir['Valor'] = top_10_para_exibir['Valor'].apply(format_currency_brl)
             
             # 4. Exibe o DataFrame já formatado, sem precisar do column_config.
             st.dataframe(
-                top_10_para_exibir[['Data', 'Descricao', 'Valor']],
+                top_10_para_exibir[['Data', 'Categoria','Descricao', 'Valor']],
                 use_container_width=True,
                 hide_index=True
             )
