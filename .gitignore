@@ -1,0 +1,12 @@
+# Arquivos de ambiente virtual
+.venv/
+venv/
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
+
+# Arquivos de configuração sensíveis (IMPORTANTÍSSIMO)
+config.yaml
+*.json
+.streamlit/secrets.toml
