@@ -50,9 +50,9 @@ TAGS_POR_CATEGORIA = {
     "Mercado": ["Supermercado", "Hortifruti", "Açougue"],
     "Transporte": ["Combustível", "Uber/99", "Manutenção Carro", "Avião", "Seguro Carro", "IPVA", "Estacionamento"],
     "Lazer": ["Passeios", "Cinema", "Shows", "Viagens"],
-    "Casa": ["Aluguel", "Luz", "Água", "Internet", "Condomínio", "Diarista", "Manutenção", "Decoração"],
-    "Saúde": ["Academia", "Farmácia", "Consulta", "Plano de Saúde"],
-    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo"],
+    "Casa": ["Aluguel", "Luz", "Água", "Internet", "Condomínio", "Diarista", "Manutenção", "Decoração", "Impostos", "Outros"],
+    "Saúde": ["Academia", "Farmácia", "Consulta", "Plano de Saúde", "Exames", "Tratamentos", "Remédios", "Dentista", "Suplementos"],
+    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo", "Pensão", "Presentes", "Educação", "Outros"],
     "Zara": ["Petshop", "Veterinário", "Ração", "Brinquedos"],
     "Outros": ["Presentes", "Taxas", "Investimentos","Assinaturas"] }
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
