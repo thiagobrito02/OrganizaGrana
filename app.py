@@ -45,6 +45,16 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # ======================== CONSTANTES ========================
 CATEGORIAS_PREDEFINIDAS = ["Alimentação", "Mercado", "Transporte", "Lazer", "Casa", "Saúde", "Pessoal", "Zara", "Outros"]
 PAGAMENTO_PREDEFINIDO = ["Cartão", "Pix", "Dinheiro"]
+TAGS_POR_CATEGORIA = {
+    "Alimentação": ["Restaurante", "iFood/Delivery", "Lanche", "Padaria"],
+    "Mercado": ["Supermercado", "Hortifruti", "Açougue"],
+    "Transporte": ["Combustível", "Uber/99", "Manutenção Carro", "Avião", "Seguro Carro", "IPVA", "Estacionamento"],
+    "Lazer": ["Passeios", "Cinema", "Shows", "Viagens"],
+    "Casa": ["Aluguel", "Luz", "Água", "Internet", "Condomínio", "Diarista", "Manutenção", "Decoração"],
+    "Saúde": ["Academia", "Farmácia", "Consulta", "Plano de Saúde"],
+    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo"],
+    "Zara": ["Petshop", "Veterinário", "Ração", "Brinquedos"],
+    "Outros": ["Presentes", "Taxas", "Investimentos","Assinaturas"] }
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 CREDENTIALS_FILE = "organiza-grana-290b193581de.json"
 SHEET_NAME = "controle_despesa"
@@ -275,7 +285,18 @@ def render_new_expense_form(user_display):
             format="DD/MM/YYYY"
         )
         valor = st.number_input("Valor (R$)", min_value=10.00, step=1.00, format="%.2f")
-        categoria = st.selectbox("Categoria", CATEGORIAS_PREDEFINIDAS)
+
+        # --- MUDANÇA PARA TAGS DINÂMICAS ---
+        # 1. Seletor de Categoria
+        categoria_selecionada = st.selectbox("Categoria", CATEGORIAS_PREDEFINIDAS)
+
+        # 2. Gera a lista de tags baseada na categoria escolhida
+        opcoes_tag = ["Nenhuma"] + TAGS_POR_CATEGORIA.get(categoria_selecionada, [])
+        
+        # 3. Seletor de Tag
+        tag_selecionada = st.selectbox("Tag (Opcional)", options=opcoes_tag)
+        # -------------------------------------
+
         pagamento = st.radio("Pagamento", PAGAMENTO_PREDEFINIDO, horizontal=True)
         descricao = st.text_input("Descrição")
 
@@ -310,10 +331,16 @@ def render_new_expense_form(user_display):
                     descricao_parcela = f"{descricao} ({i+1}/{num_parcelas})"
 
                 nova_despesa = {
-                    "Data": pd.to_datetime(data_parcela), "Categoria": categoria, "Valor": valor,
-                    "Descricao": descricao_parcela, "Pagamento": pagamento, "Usuario": user_display,
+                    "Data": pd.to_datetime(data_parcela), 
+                    "Categoria": categoria_selecionada, # Usa a variável correta
+                    "Tag": tag_selecionada if tag_selecionada != "Nenhuma" else "", # Adiciona a tag
+                    "Valor": valor,
+                    "Descricao": descricao_parcela, 
+                    "Pagamento": pagamento, 
+                    "Usuario": user_display,
                     "id_original": proximo_id + i
                 }
+                # Adiciona a nova despesa à lista
                 despesas_para_adicionar.append(nova_despesa)
 
             novas_despesas_df = pd.DataFrame(despesas_para_adicionar)
@@ -391,7 +418,8 @@ def render_expense_table(df_para_exibir):
         },
         # Definição de cada uma das suas colunas de dados
         {"field": "Data", "headerName": "Data", "editable": True, "type": ["dateColumnFilter", "customDateTimeFormat"], "custom_format_string": "dd/MM/yyyy"},
-        {"field": "Categoria", "headerName": "Categoria", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': CATEGORIAS_PREDEFINIDAS}},
+        {"field": "Categoria", "headerName": "Categoria", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': CATEGORIAS_PREDEFINIDAS}},        
+        {"field": "Tag", "headerName": "Tag", "editable": True},
         {"field": "Valor", "headerName": "Valor", "editable": True, "valueGetter": js_value_getter, "valueParser": js_value_parser, "valueFormatter": js_value_formatter},
         {"field": "Descricao", "headerName": "Descrição", "editable": True},
         {"field": "Pagamento", "headerName": "Pagamento", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': PAGAMENTO_PREDEFINIDO}},
@@ -645,11 +673,24 @@ def render_dashboard_analise_mensal(df, ano, mes):
         st.plotly_chart(fig, use_container_width=True)
 
     with col_graf2:
-        st.subheader("Composição dos Gastos")
-        gastos_categoria = df_mes_atual.groupby('Categoria')['Valor'].sum()
-        fig_donut = go.Figure(data=[go.Pie(labels=gastos_categoria.index, values=gastos_categoria.values, hole=.4)])
-        fig_donut.update_layout(template="plotly_white", title_text=f"Gastos por Categoria em {meses_nomes[mes-1]}")
-        st.plotly_chart(fig_donut, use_container_width=True)
+        st.subheader("Composição por Categoria e Tag")
+        
+        # Prepara os dados, garantindo que não há tags nulas para não quebrar o gráfico
+        df_para_sunburst = df_mes_atual.copy()
+        df_para_sunburst['Tag'] = df_para_sunburst['Tag'].fillna('Sem Tag')
+        df_para_sunburst.loc[df_para_sunburst['Tag'] == '', 'Tag'] = 'Sem Tag'
+
+        # Cria o gráfico Sunburst com um caminho hierárquico
+        fig_sunburst = px.sunburst(
+            df_para_sunburst,
+            path=['Categoria', 'Tag'], # Define a hierarquia
+            values='Valor',
+            title=f"Composição dos Gastos em {meses_nomes[mes-1]}",
+            template="plotly_white"
+        )
+        fig_sunburst.update_traces(textinfo="label+percent entry")
+        fig_sunburst.update_layout(margin = dict(t=50, l=10, r=10, b=10))
+        st.plotly_chart(fig_sunburst, use_container_width=True)
 
 # ======================== DASHBOARD TENDÊNCIAS ========================
 def render_dashboard_tendencias(df):
@@ -680,20 +721,40 @@ def render_dashboard_tendencias(df):
 
     st.markdown("---")
 
-    # 2. Gráfico de Linha Interativo por Categoria
-    st.subheader("Análise Detalhada por Categoria")
-    categorias_unicas = sorted(df_ultimos_12_meses['Categoria'].unique())
-    categorias_selecionadas = st.multiselect("Selecione as categorias para comparar:", categorias_unicas, default=categorias_unicas[:3])
+   # --- Gráfico de Linha Interativo Aprimorado com Tags ---
+    st.subheader("Análise Detalhada por Categoria e Tag")
 
-    if categorias_selecionadas:
-        df_filtrado_cat = df_ultimos_12_meses[df_ultimos_12_meses['Categoria'].isin(categorias_selecionadas)]
-        gastos_mensais_cat = df_filtrado_cat.groupby(['AnoMes', 'Categoria'])['Valor'].sum().unstack(fill_value=0).sort_index()
+    # 1. Filtro de Categoria (como antes)
+    col_filtro1, col_filtro2 = st.columns(2)
+    with col_filtro1:
+        categorias_unicas = sorted(df_ultimos_12_meses['Categoria'].unique())
+        categorias_selecionadas = st.multiselect("Primeiro, selecione as categorias:", categorias_unicas, default=categorias_unicas[:2])
+
+    # 2. Filtro de Tag (dinâmico)
+    with col_filtro2:
+        if categorias_selecionadas:
+            # Pega apenas as tags que existem nas categorias selecionadas
+            tags_disponiveis = sorted(df_ultimos_12_meses[df_ultimos_12_meses['Categoria'].isin(categorias_selecionadas)]['Tag'].fillna('Sem Tag').unique())
+            tags_selecionadas = st.multiselect("Depois, selecione as tags:", tags_disponiveis, default=tags_disponiveis)
+        else:
+            tags_selecionadas = []
+
+    # 3. Desenha o gráfico com base em ambas as seleções
+    if categorias_selecionadas and tags_selecionadas:
+        df_filtrado_cat = df_ultimos_12_meses[
+            (df_ultimos_12_meses['Categoria'].isin(categorias_selecionadas)) &
+            (df_ultimos_12_meses['Tag'].isin(tags_selecionadas))
+        ]
+        
+        # Agrupa os dados por mês e pela combinação Categoria-Tag para o gráfico
+        df_filtrado_cat['Legenda'] = df_filtrado_cat['Categoria'] + ' - ' + df_filtrado_cat['Tag'].fillna('Sem Tag')
+        gastos_mensais_cat = df_filtrado_cat.groupby(['AnoMes', 'Legenda'])['Valor'].sum().unstack(fill_value=0).sort_index()
         gastos_mensais_cat.index = gastos_mensais_cat.index.to_timestamp()
 
         fig2 = px.line(
             gastos_mensais_cat, x=gastos_mensais_cat.index, y=gastos_mensais_cat.columns,
-            title="Evolução Mensal por Categoria Selecionada",
-            labels={'x': 'Mês', 'value': 'Valor Gasto (R$)', 'variable': 'Categoria'}, markers=True
+            title="Evolução Mensal por Categoria e Tag Selecionada",
+            labels={'x': 'Mês', 'value': 'Valor Gasto (R$)', 'variable': 'Seleção'}, markers=True
         )
         fig2.update_layout(template="plotly_white")
         st.plotly_chart(fig2, use_container_width=True)
@@ -706,13 +767,24 @@ def render_dashboard_deep_dive(df):
 
     with col1:
         # 1. Treemap
-        st.subheader("Composição por Categoria (Treemap)")
+        st.subheader("Composição por Categoria e Tag (Treemap)")
         gastos_categoria = df.groupby('Categoria')['Valor'].sum().reset_index()
+
+        # Garante que a coluna Tag não tenha valores nulos que quebrem o gráfico
+        df_para_treemap = df.copy()
+        df_para_treemap['Tag'] = df_para_treemap['Tag'].fillna('Sem Tag')
+        df_para_treemap.loc[df_para_treemap['Tag'] == '', 'Tag'] = 'Sem Tag'
+
+        # O 'path' agora é hierárquico: Categoria -> Tag
         fig = px.treemap(
-            gastos_categoria, path=['Categoria'], values='Valor',
-            title='Área de cada categoria proporcional ao gasto',
+            df_para_treemap, 
+            path=['Categoria', 'Tag'], 
+            values='Valor',
+            title='Área proporcional ao gasto por Categoria e Tag',
             color_discrete_sequence=px.colors.qualitative.Pastel
         )
+        fig.update_traces(root_color="lightgrey")
+        fig.update_layout(margin = dict(t=50, l=25, r=25, b=25))
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
