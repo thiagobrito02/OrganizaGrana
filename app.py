@@ -657,7 +657,12 @@ def render_dashboard_tendencias(df):
 
     # Filtra dados para os últimos 12 meses
     doze_meses_atras = datetime.now() - relativedelta(months=12)
-    df_ultimos_12_meses = df[df['Data'] >= pd.to_datetime(doze_meses_atras)]
+    df_ultimos_12_meses = df[df['Data'] >= pd.to_datetime(doze_meses_atras)].copy()
+
+    # O restante da função agora funciona sem erros ou avisos
+    if df_ultimos_12_meses.empty:
+        st.warning("Nenhum dado encontrado nos últimos 12 meses.")
+        return
 
     # Prepara os dados, agrupando por Ano/Mês
     df_ultimos_12_meses['AnoMes'] = df_ultimos_12_meses['Data'].dt.to_period('M')
@@ -745,6 +750,8 @@ def render_dashboard_deep_dive(df):
     )
     st.plotly_chart(fig2, use_container_width=True)
 
+from io import StringIO
+
 # ======================== MAIN ========================
 def main():
     
@@ -770,6 +777,30 @@ def main():
 
     # Pega o dataframe da sessão
     df_completo = st.session_state["expenses_df"]
+
+    # --- CORREÇÃO DEFINITIVA E CENTRALIZADA ---
+    # Garante que a coluna 'Data' seja sempre do tipo datetime
+    # antes de ser passada para qualquer outra função.
+    # O 'if not df_completo.empty' previne erros se não houver dados.
+    if not df_completo.empty and 'Data' in df_completo.columns:
+        df_completo['Data'] = pd.to_datetime(df_completo['Data'], errors='coerce')
+    # ------------------------------------------
+
+    # --- INÍCIO DO BLOCO DE DEBUG ---
+    # Este bloco irá nos mostrar o estado do seu DataFrame
+    st.error("--- MODO DE DEPURAÇÃO ATIVADO ---")
+    st.write("Abaixo estão as informações do DataFrame `df_completo` antes de ser enviado para os dashboards.")
+
+    # Captura a saída do comando df.info() para exibir na tela
+    buffer = StringIO()
+    df_completo.info(buf=buffer)
+    info_string = buffer.getvalue()
+
+    st.text_area("Informações Técnicas do DataFrame (saída de df.info())", info_string, height=250)
+    st.write("Primeiras 5 linhas do DataFrame:")
+    st.dataframe(df_completo.head())
+    st.error("--- FIM DO BLOCO DE DEBUG ---")
+    # ------------------------------------
 
     # --- INTEGRAÇÃO DAS MELHORIAS ---
     
