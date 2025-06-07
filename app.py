@@ -453,6 +453,10 @@ def render_expense_table(df_para_exibir):
         df_completo.set_index('id_original', inplace=True)
         df_completo.update(updated_df)
         df_completo.reset_index(inplace=True)
+
+        df_completo['Data'] = pd.to_datetime(df_completo['Data'], errors='coerce')
+
+
         st.session_state['expenses_df'] = df_completo
         
         if save_expenses():
