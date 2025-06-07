@@ -52,7 +52,7 @@ TAGS_POR_CATEGORIA = {
     "Lazer": ["Passeios", "Cinema", "Shows", "Viagens"],
     "Casa": ["Aluguel", "Luz", "Água", "Internet", "Condomínio", "Diarista", "Manutenção", "Decoração", "Impostos", "Outros"],
     "Saúde": ["Academia", "Farmácia", "Consulta", "Plano de Saúde", "Exames", "Tratamentos", "Remédios", "Dentista", "Suplementos"],
-    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo", "Pensão", "Presentes", "Educação", "Outros"],
+    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo", "Pensão", "Presentes", "Educação", "Outros", "Giovanna"],
     "Zara": ["Petshop", "Veterinário", "Ração", "Brinquedos"],
     "Outros": ["Presentes", "Taxas", "Investimentos","Assinaturas"] }
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -167,6 +167,14 @@ def are_dataframes_equal(df1, df2):
     # Compara os dataframes usando o método nativo do pandas, que é mais seguro
     return df1.equals(df2)
 
+def on_category_change():
+    """
+    Callback para ser executado quando a categoria muda.
+    Reseta a seleção da tag para 'Nenhuma' para evitar estados inválidos.
+    """
+    # Acessamos a chave do seletor de tag e a definimos como 'Nenhuma'
+    # Isso garante que ao trocar de categoria, o campo de tag seja reiniciado.
+    st.session_state.form_tag = "Nenhuma"
 
 # ======================== AUTENTICAÇÃO ========================
 def authenticate_user():
@@ -270,100 +278,100 @@ def get_next_id():
     df = st.session_state.get("expenses_df", pd.DataFrame())
     return int(df["id_original"].max()) + 1 if not df.empty else 0
 
+from dateutil.relativedelta import relativedelta
+
 def render_new_expense_form(user_display):
-    st.checkbox(
-        "É uma despesa recorrente?", 
-        key="recorrente_checkbox", 
-        value=st.session_state.get("recorrente_checkbox", False)
-    )
+    st.subheader("Adicionar Nova Despesa")
 
-    with st.form("new_expense"):
-        # AGORA
-        data = st.date_input(
-            "Data da despesa", 
-            value=date.today(),
-            format="DD/MM/YYYY"
-        )
-        valor = st.number_input("Valor (R$)", min_value=10.00, step=1.00, format="%.2f")
-
-        # --- MUDANÇA PARA TAGS DINÂMICAS ---
-        # 1. Seletor de Categoria
-        categoria_selecionada = st.selectbox("Categoria", CATEGORIAS_PREDEFINIDAS)
-
-        # 2. Gera a lista de tags baseada na categoria escolhida
-        opcoes_tag = ["Nenhuma"] + TAGS_POR_CATEGORIA.get(categoria_selecionada, [])
+    # --- PASSO 1: BLOCO INICIAL COM DESTAQUE ---
+    # Usamos um container com borda para dar destaque visual
+    with st.container(border=True):
+        st.markdown("##### ❶ Comece por aqui")
         
-        # 3. Seletor de Tag
-        tag_selecionada = st.selectbox("Tag (Opcional)", options=opcoes_tag)
-        # -------------------------------------
+        # Cria a lista de categorias com uma opção inicial "em branco"
+        categorias_opcoes = ["Selecione uma categoria..."] + CATEGORIAS_PREDEFINIDAS
+        
+        # Inicializa o estado do seletor na primeira execução
+        if "form_categoria" not in st.session_state:
+            st.session_state.form_categoria = categorias_opcoes[0]
 
-        pagamento = st.radio("Pagamento", PAGAMENTO_PREDEFINIDO, horizontal=True)
-        descricao = st.text_input("Descrição")
+        # O seletor de categoria que controla a exibição do resto do formulário
+        st.selectbox(
+            "Categoria da Despesa", 
+            options=categorias_opcoes,
+            key="form_categoria"
+        )
+        
+        st.checkbox(
+            "É uma despesa recorrente?", 
+            key="recorrente_checkbox", 
+            value=st.session_state.get("recorrente_checkbox", False)
+        )
+    # --- FIM DO BLOCO INICIAL ---
 
-        quantidade_parcelas = 1
-        if st.session_state.get("recorrente_checkbox"):
-            quantidade_parcelas = st.number_input(
-                "Número de parcelas (incluindo a atual)", 
-                min_value=2, 
-                max_value=60,
-                value=2, 
-                step=1,
-                key="quantidade_parcelas"
-            )
+    # --- PASSO 2: FORMULÁRIO CONDICIONAL ---
+    # O formulário completo só aparece se uma categoria válida for selecionada
+    if st.session_state.form_categoria != "Selecione uma categoria...":
+        
+        with st.form("new_expense_details"): # Nome do form alterado para evitar conflitos
+            st.markdown(f"##### ❷ Detalhes para **{st.session_state.form_categoria}**")
 
-        submitted = st.form_submit_button("Adicionar")
+            # O seletor de Tag continua dinâmico como antes
+            opcoes_tag = ["Nenhuma"] + TAGS_POR_CATEGORIA.get(st.session_state.form_categoria, [])
+            tag_selecionada = st.selectbox("Tag (Opcional)", options=opcoes_tag, key="form_tag")
 
-        if submitted:
-            is_recorrente = st.session_state.get("recorrente_checkbox", False)
+            descricao = st.text_input("Descrição")
             
-            if is_recorrente:
-                num_parcelas = st.session_state.get("quantidade_parcelas", 2)
-            else:
-                num_parcelas = 1
+            col_valor, col_data = st.columns(2)
+            with col_valor:
+                valor = st.number_input("Valor (R$)", min_value=0.01, step=0.01, format="%.2f")
+            with col_data:
+                data = st.date_input("Data", value=date.today(), format="DD/MM/YYYY")
 
-            despesas_para_adicionar = []
-            proximo_id = get_next_id()
+            pagamento = st.radio("Pagamento", PAGAMENTO_PREDEFINIDO, horizontal=True)
 
-            for i in range(num_parcelas):
-                data_parcela = data + relativedelta(months=i)
-                descricao_parcela = descricao
-                if is_recorrente and num_parcelas > 1: # Só adiciona a contagem se for mais de 1 parcela
-                    descricao_parcela = f"{descricao} ({i+1}/{num_parcelas})"
+            quantidade_parcelas = 1
+            if st.session_state.get("recorrente_checkbox"):
+                quantidade_parcelas = st.number_input(
+                    "Número de parcelas", min_value=2, max_value=60, value=2, step=1, key="quantidade_parcelas"
+                )
 
-                nova_despesa = {
-                    "Data": pd.to_datetime(data_parcela), 
-                    "Categoria": categoria_selecionada, # Usa a variável correta
-                    "Tag": tag_selecionada if tag_selecionada != "Nenhuma" else "", # Adiciona a tag
-                    "Valor": valor,
-                    "Descricao": descricao_parcela, 
-                    "Pagamento": pagamento, 
-                    "Usuario": user_display,
-                    "id_original": proximo_id + i
-                }
-                # Adiciona a nova despesa à lista
-                despesas_para_adicionar.append(nova_despesa)
+            submitted = st.form_submit_button("Adicionar Despesa", use_container_width=True)
 
-            novas_despesas_df = pd.DataFrame(despesas_para_adicionar)
-            st.session_state["expenses_df"] = pd.concat(
-                [st.session_state["expenses_df"], novas_despesas_df], ignore_index=True)
-            
-            # A LINHA QUE CAUSAVA O ERRO FOI REMOVIDA DAQUI.
-            # st.session_state.recorrente_checkbox = False # <-- REMOVIDA
+            if submitted:
+                # Ao submeter, buscamos a categoria do estado da sessão
+                categoria_final = st.session_state.get("form_categoria")
+                is_recorrente = st.session_state.get("recorrente_checkbox", False)
+                
+                if is_recorrente:
+                    num_parcelas = st.session_state.get("quantidade_parcelas", 2)
+                else:
+                    num_parcelas = 1
 
-            if save_expenses():
-                st.success(f"{num_parcelas} despesa(s) adicionada(s) com sucesso!")
-
-                # --- MUDANÇA PRINCIPAL ---
-                # Em vez de tentar alterar o estado do checkbox aqui,
-                # nós apenas definimos uma "flag" para a próxima execução.
+                # Lógica de criação das despesas (continua a mesma)
+                despesas_para_adicionar = []
+                proximo_id = get_next_id()
+                for i in range(num_parcelas):
+                    # ... (resto da sua lógica para popular nova_despesa) ...
+                    nova_despesa = {
+                        "Data": pd.to_datetime(data + relativedelta(months=i)), "Categoria": categoria_final,
+                        "Tag": tag_selecionada if tag_selecionada != "Nenhuma" else "",
+                        "Valor": valor, "Descricao": f"{descricao} ({i+1}/{num_parcelas})" if is_recorrente and num_parcelas > 1 else descricao,
+                        "Pagamento": pagamento, "Usuario": user_display, "id_original": proximo_id + i
+                    }
+                    despesas_para_adicionar.append(nova_despesa)
+                    
+                novas_despesas_df = pd.DataFrame(despesas_para_adicionar)
+                st.session_state["expenses_df"] = pd.concat([st.session_state["expenses_df"], novas_despesas_df], ignore_index=True)
                 st.session_state.submission_success = True
-                # -------------------------
 
-                read_sheet_data.clear()
-                time.sleep(1)
-                st.rerun()
-            else:
-                st.error("Erro ao salvar despesa.")
+                if save_expenses():
+                    st.success(f"{num_parcelas} despesa(s) adicionada(s) com sucesso!")
+                    read_sheet_data.clear()
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("Erro ao salvar despesa.")
 
 def render_expense_table(df_para_exibir):
     
@@ -437,6 +445,10 @@ def render_expense_table(df_para_exibir):
             "filter": True,
             "resizable": True,
         },
+        # --- ADICIONE ESTAS DUAS LINHAS PARA HABILITAR A PAGINAÇÃO ---
+        "pagination": True,
+        "paginationPageSize": 20  # Define que cada página terá 20 linhas
+        # -----------------------------------------------------------
     }
     # --- FIM DA CONSTRUÇÃO MANUAL ---
 
@@ -828,15 +840,14 @@ def render_dashboard_deep_dive(df):
 def main():
     
     # --- BLOCO DE RESET (EXECUTADO PRIMEIRO) ---
-    # Verifica se a "bandeira" foi levantada na execução anterior.
     if st.session_state.get("submission_success", False):
-        # Abaixa a bandeira para que este bloco não rode novamente sem necessidade.
         st.session_state.submission_success = False
-        
-        # Agora é seguro resetar o estado do checkbox, pois o widget ainda não foi desenhado.
         st.session_state.recorrente_checkbox = False
         
-        # Força um último rerun para garantir que a página seja redesenhada com o checkbox desmarcado.
+        # --- MUDANÇA PRINCIPAL AQUI ---
+        # Reseta também a categoria para o valor inicial "em branco"
+        st.session_state.form_categoria = "Selecione uma categoria..."
+        
         st.rerun()
     # --------------------------------------------
 
