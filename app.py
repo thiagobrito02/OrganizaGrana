@@ -750,7 +750,7 @@ def render_dashboard_deep_dive(df):
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-from io import StringIO
+#from io import StringIO
 
 # ======================== MAIN ========================
 def main():
@@ -786,21 +786,21 @@ def main():
         df_completo['Data'] = pd.to_datetime(df_completo['Data'], errors='coerce')
     # ------------------------------------------
 
-    # --- INÍCIO DO BLOCO DE DEBUG ---
-    # Este bloco irá nos mostrar o estado do seu DataFrame
-    st.error("--- MODO DE DEPURAÇÃO ATIVADO ---")
-    st.write("Abaixo estão as informações do DataFrame `df_completo` antes de ser enviado para os dashboards.")
+    # # --- INÍCIO DO BLOCO DE DEBUG ---
+    # # Este bloco irá nos mostrar o estado do seu DataFrame
+    # st.error("--- MODO DE DEPURAÇÃO ATIVADO ---")
+    # st.write("Abaixo estão as informações do DataFrame `df_completo` antes de ser enviado para os dashboards.")
 
-    # Captura a saída do comando df.info() para exibir na tela
-    buffer = StringIO()
-    df_completo.info(buf=buffer)
-    info_string = buffer.getvalue()
+    # # Captura a saída do comando df.info() para exibir na tela
+    # buffer = StringIO()
+    # df_completo.info(buf=buffer)
+    # info_string = buffer.getvalue()
 
-    st.text_area("Informações Técnicas do DataFrame (saída de df.info())", info_string, height=250)
-    st.write("Primeiras 5 linhas do DataFrame:")
-    st.dataframe(df_completo.head())
-    st.error("--- FIM DO BLOCO DE DEBUG ---")
-    # ------------------------------------
+    # st.text_area("Informações Técnicas do DataFrame (saída de df.info())", info_string, height=250)
+    # st.write("Primeiras 5 linhas do DataFrame:")
+    # st.dataframe(df_completo.head())
+    # st.error("--- FIM DO BLOCO DE DEBUG ---")
+    # # ------------------------------------
 
     # --- INTEGRAÇÃO DAS MELHORIAS ---
     
