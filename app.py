@@ -462,7 +462,7 @@ def render_expense_table(df_para_exibir):
 
             # PARÂMETROS REMOVIDOS PARA O TESTE
             # height=600, 
-            theme='alpine',
+            # theme='alpine',
             # fit_columns_on_grid_load=True
         )
         # --- FIM DA CHAMADA ---
