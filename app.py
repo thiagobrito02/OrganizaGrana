@@ -48,11 +48,11 @@ PAGAMENTO_PREDEFINIDO = ["Cartão", "Pix", "Dinheiro"]
 TAGS_POR_CATEGORIA = {
     "Alimentação": ["Restaurante", "iFood/Delivery", "Lanche", "Padaria"],
     "Mercado": ["Supermercado", "Hortifruti", "Açougue"],
-    "Transporte": ["Combustível", "Uber/99", "Manutenção Carro", "Avião", "Seguro Carro", "IPVA", "Estacionamento"],
+    "Transporte": ["Combustível", "Uber/99", "Manutenção", "Avião", "Seguro", "IPVA", "Estacionamento", "Parcelamento"],
     "Lazer": ["Passeios", "Cinema", "Shows", "Viagens"],
     "Casa": ["Aluguel", "Luz", "Água", "Internet", "Condomínio", "Diarista", "Manutenção", "Decoração", "Impostos", "Outros"],
     "Saúde": ["Academia", "Farmácia", "Consulta", "Plano de Saúde", "Exames", "Tratamentos", "Remédios", "Dentista", "Suplementos"],
-    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo", "Pensão", "Presentes", "Educação", "Outros", "Giovanna"],
+    "Pessoal": ["Roupas", "Calçados", "Cosméticos", "Cabelo", "Pensão", "Presentes", "Educação", "Giovanna", "Outros"],
     "Zara": ["Petshop", "Veterinário", "Ração", "Brinquedos"],
     "Outros": ["Presentes", "Taxas", "Investimentos","Assinaturas"] }
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -378,6 +378,21 @@ def render_expense_table(df_para_exibir):
     if df_para_exibir.empty:
         st.info("Nenhuma despesa para exibir com os filtros atuais.")
         return
+
+    # --- Usando o GridOptionsBuilder de forma explícita e completa ---
+    gb = GridOptionsBuilder.from_dataframe(df_para_exibir)
+
+    # 1. HABILITA A PAGINAÇÃO
+    # Define o tamanho da página e ativa a funcionalidade.
+    gb.configure_pagination(paginationPageSize=20, paginationAutoPageSize=False)
+
+    # 2. HABILITA A SELEÇÃO COM CHECKBOXES
+    # Essencial para a função de exclusão.
+    gb.configure_selection(
+        selection_mode="multiple",
+        use_checkbox=True,
+        header_checkbox=True
+    )
     
     # 1. VALUE GETTER: Prepara o valor para a CÉLULA DE EDIÇÃO.
     # Pega o número (ex: 200.5) e formata como texto com vírgula (ex: "200,50").
@@ -413,63 +428,44 @@ def render_expense_table(df_para_exibir):
         }
     """)
     
-    # 2. Definição Manual das Colunas (columnDefs)
-    # Esta é a parte principal da mudança.
-    column_defs = [
-        # Coluna especial para os Checkboxes
-        {
-            "headerName": "", # Sem texto no cabeçalho
-            "checkboxSelection": True,
-            "headerCheckboxSelection": True,
-            "width": 50,
-            "lockPosition": True
-        },
-        # Definição de cada uma das suas colunas de dados
-        {"field": "Data", "headerName": "Data", "editable": True, "type": ["dateColumnFilter", "customDateTimeFormat"], "custom_format_string": "dd/MM/yyyy"},
-        {"field": "Categoria", "headerName": "Categoria", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': CATEGORIAS_PREDEFINIDAS}},        
-        {"field": "Tag", "headerName": "Tag", "editable": True},
-        {"field": "Valor", "headerName": "Valor", "editable": True, "valueGetter": js_value_getter, "valueParser": js_value_parser, "valueFormatter": js_value_formatter},
-        {"field": "Descricao", "headerName": "Descrição", "editable": True},
-        {"field": "Pagamento", "headerName": "Pagamento", "editable": True, "cellEditor": 'agSelectCellEditor', "cellEditorParams": {'values': PAGAMENTO_PREDEFINIDO}},
-        {"field": "Usuario", "headerName": "Usuário", "editable": False},
-        # A coluna id_original não precisa ser definida aqui se não quisermos exibi-la
-    ]
+    gb.configure_column("Valor", editable=True, valueGetter=js_value_getter, valueParser=js_value_parser, valueFormatter=js_value_formatter, type=["numericColumn", "numberColumnFilter"])
+    gb.configure_column("Data", type=["dateColumnFilter", "customDateTimeFormat"], custom_format_string='dd/MM/yyyy', editable=True)
+    gb.configure_column("Categoria", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': CATEGORIAS_PREDEFINIDAS})
+    gb.configure_column("Tag", headerName="Tag", editable=True)
+    gb.configure_column("Pagamento", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': PAGAMENTO_PREDEFINIDO})
+    gb.configure_column("Descricao", editable=True, autoHeight=True, wrapText=True) # wrapText e autoHeight para descrições longas
+    gb.configure_column("Usuario", editable=False)
+    gb.configure_column("id_original", hide=True)
 
-    # 3. Definição das Opções Gerais do Grid
-    grid_options = {
-        "columnDefs": column_defs,
-        "rowSelection": 'multiple',
-        "suppressRowClickSelection": True, # Evita que a linha seja selecionada com um clique normal
-        "defaultColDef": { # Definições padrão para todas as colunas
-            "sortable": True,
-            "filter": True,
-            "resizable": True,
-        },
-        # --- ADICIONE ESTAS DUAS LINHAS PARA HABILITAR A PAGINAÇÃO ---
-        "pagination": True,
-        "paginationPageSize": 20  # Define que cada página terá 20 linhas
-        # -----------------------------------------------------------
-    }
-    # --- FIM DA CONSTRUÇÃO MANUAL ---
+    # Constrói o dicionário final de opções
+    grid_options = gb.build()
+    # --- FIM DA CONFIGURAÇÃO ---
 
-    
     # --- Formulário Único para Edição, Salvamento e Exclusão ---
     with st.form("main_form"):
         st.subheader("Tabela de Despesas")
         st.caption("Você pode editar as células diretamente. Ao final, clique em Salvar ou Excluir.")
 
 
+        # --- CHAMADA DO AGGRID MINIMALISTA ---
         grid_return = AgGrid(
             df_para_exibir,
             gridOptions=grid_options,
             key='stable_expense_grid',
+            
+            # PARÂMETROS ESSENCIAIS (mantidos)
             update_mode=GridUpdateMode.MODEL_CHANGED,
             data_return_mode=DataReturnMode.AS_INPUT,
             allow_unsafe_jscode=True,
             enable_enterprise_modules=False,
-            height=400,
-            reload_data=True
+            reload_data=True,
+
+            # PARÂMETROS REMOVIDOS PARA O TESTE
+            # height=600, 
+            theme='alpine',
+            # fit_columns_on_grid_load=True
         )
+        # --- FIM DA CHAMADA ---
 
         # Botões de ação dentro do mesmo formulário
         col1, col2, _ = st.columns([1, 1, 3])
@@ -536,60 +532,34 @@ from datetime import datetime
 def setup_filtros(df, usuario_logado):
     st.sidebar.header("Filtros")
 
-    if df.empty:
-        st.sidebar.warning("Nenhuma despesa cadastrada para filtrar.")
-        return df, "Todos", "Todos"
-
-    df['Data'] = pd.to_datetime(df['Data'])
-    
-    # --- OPÇÕES DOS FILTROS ---
+    # --- Listas de Opções ---
     anos_disponiveis = ["Todos"] + sorted(df['Data'].dt.year.unique(), reverse=True)
     meses_nomes = ["Todos", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    
+    lista_usuarios = sorted(df['Usuario'].unique().tolist())
+    if usuario_logado not in lista_usuarios:
+        lista_usuarios.insert(0, usuario_logado)
+    usuarios_disponiveis = ["Todos"] + lista_usuarios
+
+    # --- Inicialização do Estado ---
+    if 'filtro_ano' not in st.session_state: st.session_state.filtro_ano = datetime.now().year
+    if 'filtro_mes' not in st.session_state: st.session_state.filtro_mes = meses_nomes[datetime.now().month]
+    if 'filtro_usuario' not in st.session_state: st.session_state.filtro_usuario = usuario_logado
+    if 'filtro_categorias' not in st.session_state: st.session_state.filtro_categorias = ["Todas"]
+
+    # --- Widgets ---
+    ano = st.sidebar.selectbox("Ano", anos_disponiveis, key="filtro_ano")
+    mes_nome = st.sidebar.selectbox("Mês", meses_nomes, key="filtro_mes")
+    usuario = st.sidebar.selectbox("Usuário", usuarios_disponiveis, key="filtro_usuario")
+    
+    categorias_disponiveis = ["Todas"] + sorted(df['Categoria'].unique().tolist())
+    categorias = st.sidebar.multiselect("Categorias", categorias_disponiveis, key="filtro_categorias")
+
+    # --- Retorna as seleções ---
     meses_map = {nome: i for i, nome in enumerate(meses_nomes)}
-
-    # --- INICIALIZAÇÃO INTELIGENTE DO ESTADO DOS FILTROS ---
-    # Este bloco só roda na primeira vez que o app carrega, definindo os padrões.
-    if 'filtro_ano' not in st.session_state:
-        st.session_state.filtro_ano = datetime.now().year
-    if 'filtro_mes' not in st.session_state:
-        st.session_state.filtro_mes = meses_nomes[datetime.now().month] # Pega o nome do mês atual, ex: "Junho"
-    if 'filtro_usuario' not in st.session_state:
-        st.session_state.filtro_usuario = usuario_logado
-    # ----------------------------------------------------
-
-    # --- WIDGETS DE FILTRO COM 'key' PARA MEMORIZAR A ESCOLHA ---
-    # O Streamlit usará o valor em st.session_state para definir a seleção padrão.
-    ano_selecionado = st.sidebar.selectbox("Ano", anos_disponiveis, key="filtro_ano")
-    mes_selecionado_nome = st.sidebar.selectbox("Mês", meses_nomes, key="filtro_mes")
+    mes_num = meses_map[mes_nome]
     
-    usuarios_disponiveis = ["Todos"] + sorted(df['Usuario'].unique().tolist())
-    usuario_selecionado = st.sidebar.selectbox("Usuário", usuarios_disponiveis, key="filtro_usuario")
-    # ------------------------------------------------------------
-    
-    # --- APLICAÇÃO DOS FILTROS DE FORMA CONDICIONAL ---
-    mes_selecionado_num = meses_map[mes_selecionado_nome]
-
-    df_filtrado = df.copy() # Começa com o dataframe completo
-
-    if ano_selecionado != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Data'].dt.year == ano_selecionado]
-
-    if mes_selecionado_num != 0: # 0 é o valor para "Todos"
-        df_filtrado = df_filtrado[df_filtrado['Data'].dt.month == mes_selecionado_num]
-
-    # Aplica o novo filtro de usuário
-    if usuario_selecionado != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Usuario'] == usuario_selecionado]
-
-    # --- FILTRO DE CATEGORIA (APLICADO SOBRE O RESULTADO ANTERIOR) ---
-    if not df_filtrado.empty:
-        categorias_unicas = ["Todas"] + sorted(df_filtrado['Categoria'].unique())
-        categorias_selecionadas = st.sidebar.multiselect("Categorias", categorias_unicas, default=["Todas"])
-        
-        if "Todas" not in categorias_selecionadas:
-            df_filtrado = df_filtrado[df_filtrado['Categoria'].isin(categorias_selecionadas)]
-    
-    return df_filtrado, ano_selecionado, mes_selecionado_num
+    return ano, mes_num, usuario, categorias
 
 # ======================== GRÁFICOS ========================
 def render_dashboard(df):
@@ -641,22 +611,33 @@ def render_dashboard(df):
 # ======================== DASHBOARD ANÁLISE MENSAL ========================
 meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-def render_dashboard_analise_mensal(df, ano, mes):
-    st.header(f"Análise de {meses_nomes[mes-1]}/{ano}")
+import plotly.graph_objects as go
+from dateutil.relativedelta import relativedelta
 
-    # Filtra dados para o mês atual e o anterior
+def render_dashboard_analise_mensal(df_usuario_filtrado, ano, mes):
+    # O título agora reflete o usuário selecionado na barra lateral, lendo do session_state
+    usuario_selecionado = st.session_state.get("filtro_usuario", "Todos")
+    st.header(f"Análise de {meses_nomes[mes-1]}/{ano} para: {usuario_selecionado}")
+
+    # A função agora opera diretamente no DataFrame que recebe (df_usuario_filtrado),
+    # que já foi filtrado por usuário na função main.
+    # O seletor de usuário que existia aqui foi REMOVIDO por ser redundante.
+
+    # Lógica de filtro de data para pegar o mês atual e o anterior
     data_inicio_mes_atual = datetime(ano, mes, 1)
     data_fim_mes_atual = data_inicio_mes_atual + relativedelta(months=1) - relativedelta(days=1)
     data_inicio_mes_anterior = data_inicio_mes_atual - relativedelta(months=1)
 
-    df_mes_atual = df[(df['Data'] >= pd.to_datetime(data_inicio_mes_atual)) & (df['Data'] <= pd.to_datetime(data_fim_mes_atual))]
-    df_mes_anterior = df[(df['Data'] >= pd.to_datetime(data_inicio_mes_anterior)) & (df['Data'] < pd.to_datetime(data_inicio_mes_atual))]
+    df_mes_atual = df_usuario_filtrado[
+        (df_usuario_filtrado['Data'] >= pd.to_datetime(data_inicio_mes_atual)) & 
+        (df_usuario_filtrado['Data'] <= pd.to_datetime(data_fim_mes_atual))
+    ]
+    df_mes_anterior = df_usuario_filtrado[
+        (df_usuario_filtrado['Data'] >= pd.to_datetime(data_inicio_mes_anterior)) & 
+        (df_usuario_filtrado['Data'] < pd.to_datetime(data_inicio_mes_atual))
+    ]
 
-    if df_mes_atual.empty:
-        st.warning("Nenhum dado encontrado para o mês selecionado.")
-        return
-
-    # 1. KPIs Comparativos
+    # KPIs são calculados. Se não houver dados, a soma será 0.
     total_atual = df_mes_atual['Valor'].sum()
     total_anterior = df_mes_anterior['Valor'].sum()
     delta = ((total_atual - total_anterior) / total_anterior * 100) if total_anterior > 0 else 0
@@ -666,63 +647,59 @@ def render_dashboard_analise_mensal(df, ano, mes):
     col2.metric("Total Gasto no Mês Anterior", format_currency_brl(total_anterior), f"{delta:,.2f}%")
 
     st.markdown("---")
+    
+    # Se não houver absolutamente nenhuma despesa para o usuário no mês selecionado,
+    # mostramos um aviso e não tentamos desenhar os gráficos.
+    if df_mes_atual.empty:
+        st.info(f"Nenhuma despesa encontrada para '{usuario_selecionado}' no período selecionado.")
+        return
 
-    # 2. Gráficos
+    # Os gráficos são desenhados normalmente com os dados do mês atual
     col_graf1, col_graf2 = st.columns(2)
-
     with col_graf1:
         st.subheader("Comparativo por Categoria")
         gastos_cat_atual = df_mes_atual.groupby('Categoria')['Valor'].sum()
         gastos_cat_anterior = df_mes_anterior.groupby('Categoria')['Valor'].sum()
-
         df_comp = pd.DataFrame({'Mês Atual': gastos_cat_atual, 'Mês Anterior': gastos_cat_anterior}).fillna(0)
-
+        
         fig = go.Figure(data=[
             go.Bar(name='Mês Anterior', x=df_comp.index, y=df_comp['Mês Anterior']),
             go.Bar(name='Mês Atual', x=df_comp.index, y=df_comp['Mês Atual'])
         ])
-        fig.update_layout(barmode='group', template="plotly_white", title_text="Categoria vs. Categoria (Mês Anterior e Atual)")
+        fig.update_layout(barmode='group', template="plotly_white", title_text="Categoria vs. Categoria")
         st.plotly_chart(fig, use_container_width=True)
 
     with col_graf2:
-        st.subheader("Composição por Categoria e Tag")
-        
-        # Prepara os dados, garantindo que não há tags nulas para não quebrar o gráfico
+        st.subheader("Composição dos Gastos")
+        # Usando o Sunburst que implementamos
         df_para_sunburst = df_mes_atual.copy()
-        df_para_sunburst['Tag'] = df_para_sunburst['Tag'].fillna('Sem Tag')
-        df_para_sunburst.loc[df_para_sunburst['Tag'] == '', 'Tag'] = 'Sem Tag'
-
-        # Cria o gráfico Sunburst com um caminho hierárquico
+        df_para_sunburst['Tag'] = df_para_sunburst['Tag'].fillna('Sem Tag').replace('', 'Sem Tag')
         fig_sunburst = px.sunburst(
             df_para_sunburst,
-            path=['Categoria', 'Tag'], # Define a hierarquia
+            path=['Categoria', 'Tag'],
             values='Valor',
-            title=f"Composição dos Gastos em {meses_nomes[mes-1]}",
-            template="plotly_white"
+            title=f"Composição dos Gastos em {meses_nomes[mes-1]}"
         )
         fig_sunburst.update_traces(textinfo="label+percent entry")
-        fig_sunburst.update_layout(margin = dict(t=50, l=10, r=10, b=10))
         st.plotly_chart(fig_sunburst, use_container_width=True)
 
 # ======================== DASHBOARD TENDÊNCIAS ========================
-def render_dashboard_tendencias(df):
-    st.header("Análise de Tendências (Últimos 12 Meses)")
+def render_dashboard_tendencias(df): # A função agora recebe o DF já filtrado
+    st.header("Análise de Tendências")
+    st.info("Este gráfico reflete o período selecionado nos filtros da barra lateral.")
 
-    # Filtra dados para os últimos 12 meses
-    doze_meses_atras = datetime.now() - relativedelta(months=12)
-    df_ultimos_12_meses = df[df['Data'] >= pd.to_datetime(doze_meses_atras)].copy()
+    # A função não filtra mais por 'últimos 12 meses'. Ela usa o que recebe.
+    df_para_analise = df.copy()
 
-    # O restante da função agora funciona sem erros ou avisos
-    if df_ultimos_12_meses.empty:
-        st.warning("Nenhum dado encontrado nos últimos 12 meses.")
+    if df_para_analise.empty:
+        st.warning("Nenhum dado encontrado para o período e filtros selecionados.")
         return
 
-    # Prepara os dados, agrupando por Ano/Mês
-    df_ultimos_12_meses['AnoMes'] = df_ultimos_12_meses['Data'].dt.to_period('M')
-    gastos_mensais = df_ultimos_12_meses.groupby('AnoMes')['Valor'].sum().sort_index()
-    gastos_mensais.index = gastos_mensais.index.to_timestamp() # Converte para data para o gráfico
+    # O resto da lógica de agrupamento e plotagem continua a mesma
+    df_para_analise['AnoMes'] = df_para_analise['Data'].dt.to_period('M')
+    gastos_mensais = df_para_analise.groupby('AnoMes')['Valor'].sum().sort_index()
+    gastos_mensais.index = gastos_mensais.index.to_timestamp()
 
-    # 1. Gráfico de Linha Principal
     fig = px.line(
         x=gastos_mensais.index, y=gastos_mensais.values,
         title="Evolução Mensal do Gasto Total",
@@ -733,39 +710,31 @@ def render_dashboard_tendencias(df):
 
     st.markdown("---")
 
-   # --- Gráfico de Linha Interativo Aprimorado com Tags ---
     st.subheader("Análise Detalhada por Categoria e Tag")
-
-    # 1. Filtro de Categoria (como antes)
     col_filtro1, col_filtro2 = st.columns(2)
     with col_filtro1:
-        categorias_unicas = sorted(df_ultimos_12_meses['Categoria'].unique())
-        categorias_selecionadas = st.multiselect("Primeiro, selecione as categorias:", categorias_unicas, default=categorias_unicas[:2])
+        categorias_unicas = sorted(df_para_analise['Categoria'].unique())
+        categorias_selecionadas = st.multiselect("Selecione as categorias:", categorias_unicas, default=categorias_unicas[:3])
 
-    # 2. Filtro de Tag (dinâmico)
     with col_filtro2:
         if categorias_selecionadas:
-            # Pega apenas as tags que existem nas categorias selecionadas
-            tags_disponiveis = sorted(df_ultimos_12_meses[df_ultimos_12_meses['Categoria'].isin(categorias_selecionadas)]['Tag'].fillna('Sem Tag').unique())
-            tags_selecionadas = st.multiselect("Depois, selecione as tags:", tags_disponiveis, default=tags_disponiveis)
+            tags_disponiveis = sorted(df_para_analise[df_para_analise['Categoria'].isin(categorias_selecionadas)]['Tag'].fillna('Sem Tag').unique())
+            tags_selecionadas = st.multiselect("Selecione as tags:", tags_disponiveis, default=tags_disponiveis)
         else:
             tags_selecionadas = []
 
-    # 3. Desenha o gráfico com base em ambas as seleções
     if categorias_selecionadas and tags_selecionadas:
-        df_filtrado_cat = df_ultimos_12_meses[
-            (df_ultimos_12_meses['Categoria'].isin(categorias_selecionadas)) &
-            (df_ultimos_12_meses['Tag'].isin(tags_selecionadas))
+        df_filtrado_cat = df_para_analise[
+            (df_para_analise['Categoria'].isin(categorias_selecionadas)) &
+            (df_para_analise['Tag'].isin(tags_selecionadas))
         ]
-        
-        # Agrupa os dados por mês e pela combinação Categoria-Tag para o gráfico
         df_filtrado_cat['Legenda'] = df_filtrado_cat['Categoria'] + ' - ' + df_filtrado_cat['Tag'].fillna('Sem Tag')
         gastos_mensais_cat = df_filtrado_cat.groupby(['AnoMes', 'Legenda'])['Valor'].sum().unstack(fill_value=0).sort_index()
         gastos_mensais_cat.index = gastos_mensais_cat.index.to_timestamp()
 
         fig2 = px.line(
             gastos_mensais_cat, x=gastos_mensais_cat.index, y=gastos_mensais_cat.columns,
-            title="Evolução Mensal por Categoria e Tag Selecionada",
+            title="Evolução Mensal por Seleção",
             labels={'x': 'Mês', 'value': 'Valor Gasto (R$)', 'variable': 'Seleção'}, markers=True
         )
         fig2.update_layout(template="plotly_white")
@@ -838,105 +807,89 @@ def render_dashboard_deep_dive(df):
 
 # ======================== MAIN ========================
 def main():
-    
-    # --- BLOCO DE RESET (EXECUTADO PRIMEIRO) ---
+    # --- BLOCO 1: RESET DO FORMULÁRIO (Executado primeiro após um envio) ---
     if st.session_state.get("submission_success", False):
         st.session_state.submission_success = False
         st.session_state.recorrente_checkbox = False
-        
-        # --- MUDANÇA PRINCIPAL AQUI ---
-        # Reseta também a categoria para o valor inicial "em branco"
         st.session_state.form_categoria = "Selecione uma categoria..."
-        
         st.rerun()
-    # --------------------------------------------
 
-
+    # --- BLOCO 2: AUTENTICAÇÃO DO USUÁRIO ---
     user_display, is_auth = authenticate_user()
     if not is_auth:
         return
+
+    # --- BLOCO 3: CARREGAMENTO E PREPARAÇÃO DOS DADOS ---
     if "expenses_df" not in st.session_state:
         load_expenses()
+    
+    df_completo = st.session_state.get("expenses_df", pd.DataFrame())
 
-    # Pega o dataframe da sessão
-    df_completo = st.session_state["expenses_df"]
-
-    # --- CORREÇÃO DEFINITIVA E CENTRALIZADA ---
-    # Garante que a coluna 'Data' seja sempre do tipo datetime
-    # antes de ser passada para qualquer outra função.
-    # O 'if not df_completo.empty' previne erros se não houver dados.
+    # Garante que a coluna 'Data' seja sempre do tipo datetime antes de qualquer operação
     if not df_completo.empty and 'Data' in df_completo.columns:
         df_completo['Data'] = pd.to_datetime(df_completo['Data'], errors='coerce')
-    # ------------------------------------------
 
-    # # --- INÍCIO DO BLOCO DE DEBUG ---
-    # # Este bloco irá nos mostrar o estado do seu DataFrame
-    # st.error("--- MODO DE DEPURAÇÃO ATIVADO ---")
-    # st.write("Abaixo estão as informações do DataFrame `df_completo` antes de ser enviado para os dashboards.")
-
-    # # Captura a saída do comando df.info() para exibir na tela
-    # buffer = StringIO()
-    # df_completo.info(buf=buffer)
-    # info_string = buffer.getvalue()
-
-    # st.text_area("Informações Técnicas do DataFrame (saída de df.info())", info_string, height=250)
-    # st.write("Primeiras 5 linhas do DataFrame:")
-    # st.dataframe(df_completo.head())
-    # st.error("--- FIM DO BLOCO DE DEBUG ---")
-    # # ------------------------------------
-
-    # --- INTEGRAÇÃO DAS MELHORIAS ---
-    
-    # 1. Aplica os filtros da barra lateral para obter o DF filtrado
-    df_filtrado, ano_selecionado, mes_selecionado_num = setup_filtros(df_completo, user_display)
+    # --- BLOCO 4: FILTROS E PREPARAÇÃO DA SIDEBAR ---
+    # A função setup_filtros agora apenas mostra os widgets e retorna as escolhas do usuário
+    ano_selecionado, mes_selecionado_num, usuario_selecionado, categorias_selecionadas = setup_filtros(df_completo, user_display)
 
     st.sidebar.title("FinApp")
     st.sidebar.markdown(f"Bem-vindo, {user_display}")
-    
     if st.sidebar.button("Logout"):
-        for k in ["authenticated", "user_display", "expenses_df"]:
-            st.session_state.pop(k, None)
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
 
+    # --- BLOCO 5: LÓGICA DE FILTRAGEM CENTRALIZADA ---
+    # Primeiro, filtra pelo usuário. Este será o nosso dataframe base para os dashboards de longo prazo.
+    df_base_usuario_filtrado = df_completo.copy()
+    if usuario_selecionado != "Todos":
+        df_base_usuario_filtrado = df_base_usuario_filtrado[df_base_usuario_filtrado['Usuario'] == usuario_selecionado]
+
+    # Em seguida, cria um segundo DataFrame com TODOS os filtros aplicados, para as visões detalhadas.
+    df_filtrado_final = df_base_usuario_filtrado.copy()
+    if ano_selecionado != "Todos":
+        df_filtrado_final = df_filtrado_final[df_filtrado_final['Data'].dt.year == ano_selecionado]
+    if mes_selecionado_num != 0: # 0 = "Todos"
+        df_filtrado_final = df_filtrado_final[df_filtrado_final['Data'].dt.month == mes_selecionado_num]
+    if "Todas" not in categorias_selecionadas:
+        df_filtrado_final = df_filtrado_final[df_filtrado_final['Categoria'].isin(categorias_selecionadas)]
+            
+    # --- BLOCO 6: RENDERIZAÇÃO DA PÁGINA PRINCIPAL ---
     st.title("💰 Controle de Despesas")
 
-    # --- NOVA ESTRUTURA COM ABAS PRINCIPAIS ---
     tab_dashboard, tab_lancamentos = st.tabs(["📊 Dashboards", "✍️ Lançamentos"])
 
     with tab_dashboard:
         st.header("Análise Visual de Gastos")
 
-        # --- LÓGICA DO SELETOR DE DASHBOARD ---
-        # Define as opções de dashboard disponíveis
+        # Lógica para mostrar/esconder o dashboard de Análise Mensal
         opcoes_dashboard = ["Análise de Tendências", "Visão Detalhada"]
-        # Só adiciona a opção de "Análise Mensal" se um mês e ano específicos foram selecionados
         if ano_selecionado != "Todos" and mes_selecionado_num != 0:
             opcoes_dashboard.insert(0, "Análise Mensal")
-
+        
         dashboard_selecionado = st.selectbox(
             "Escolha uma visão de análise:",
             opcoes_dashboard
         )
         
-        # Renderiza o dashboard escolhido
+        # Chamadas corretas para cada dashboard com o DataFrame apropriado
         if dashboard_selecionado == "Análise Mensal":
-            render_dashboard_analise_mensal(df_completo, ano_selecionado, mes_selecionado_num)
+            render_dashboard_analise_mensal(df_base_usuario_filtrado, ano_selecionado, mes_selecionado_num)
         elif dashboard_selecionado == "Análise de Tendências":
-            render_dashboard_tendencias(df_completo) # Tendências usa o DF completo
+            render_dashboard_tendencias(df_base_usuario_filtrado)
         elif dashboard_selecionado == "Visão Detalhada":
-            render_dashboard_deep_dive(df_filtrado) # Visão detalhada usa o DF já filtrado
+            render_dashboard_deep_dive(df_filtrado_final)
 
     with tab_lancamentos:
         st.header("Gerenciar Despesas")
         
-        # Abas aninhadas para Adicionar e Ver a Tabela
         tab_adicionar, tab_tabela = st.tabs(["Adicionar Nova Despesa", "Ver Tabela Detalhada"])
 
         with tab_adicionar:
             render_new_expense_form(user_display)
-
         with tab_tabela:
-            render_expense_table(df_filtrado)
+            render_expense_table(df_filtrado_final)
 
 if __name__ == "__main__":
     main()
